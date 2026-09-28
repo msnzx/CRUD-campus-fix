@@ -50,6 +50,20 @@ async function fetchLookups(): Promise<Lookups> {
   }
 }
 
+/**
+ * Start fetching lookups immediately, at module load, rather than waiting for
+ * a component to mount after auth resolves. Lookup tables are public reference
+ * data readable by any signed-in user, and the request overlaps with the auth
+ * round trip instead of queueing behind it.
+ */
+export function prefetchLookups(): void {
+  if (cache || inflight) return
+  inflight = fetchLookups()
+  inflight.catch(() => {
+    inflight = null
+  })
+}
+
 export function useLookups(): { lookups: Lookups; ready: boolean } {
   const [lookups, setLookups] = useState<Lookups>(cache ?? EMPTY)
   const [ready, setReady] = useState(cache !== null)
@@ -57,13 +71,23 @@ export function useLookups(): { lookups: Lookups; ready: boolean } {
   useEffect(() => {
     if (cache) return
     let active = true
+
+    // A failed fetch must not be cached. Without clearing `inflight` on
+    // rejection, one network blip leaves every consumer stuck on a loading
+    // spinner for the rest of the session with no way to retry.
     inflight ??= fetchLookups()
-    inflight.then((result) => {
-      cache = result
-      if (!active) return
-      setLookups(result)
-      setReady(true)
-    })
+    inflight
+      .then((result) => {
+        cache = result
+        if (!active) return
+        setLookups(result)
+        setReady(true)
+      })
+      .catch(() => {
+        inflight = null
+        if (active) setReady(true) // render with empty lookups rather than hang
+      })
+
     return () => {
       active = false
     }

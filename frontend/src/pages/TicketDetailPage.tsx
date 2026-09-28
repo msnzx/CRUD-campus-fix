@@ -95,13 +95,18 @@ export default function TicketDetailPage() {
 
     // Attachments live in a private bucket. Mint a short-lived signed URL
     // per object; there is no public path to these files.
+    // One round trip per attachment, in parallel rather than in series.
+    const attachmentRows = a.data ?? []
+    const signed = await Promise.all(
+      attachmentRows.map((att) =>
+        supabase.storage
+          .from(ATTACHMENT_BUCKET)
+          .createSignedUrl(att.file_url, 300)
+          .then((r) => [att.attachment_id, r.data?.signedUrl] as const),
+      ),
+    )
     const urls: Record<number, string> = {}
-    for (const att of a.data ?? []) {
-      const { data: signed } = await supabase.storage
-        .from(ATTACHMENT_BUCKET)
-        .createSignedUrl(att.file_url, 300)
-      if (signed) urls[att.attachment_id] = signed.signedUrl
-    }
+    for (const [id, url] of signed) if (url) urls[id] = url
     setSignedUrls(urls)
     setLoading(false)
   }, [ticketId])

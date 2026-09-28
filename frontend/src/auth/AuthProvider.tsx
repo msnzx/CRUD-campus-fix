@@ -39,18 +39,18 @@ const AuthContext = createContext<AuthValue | null>(null)
 async function loadProfile(userId: string): Promise<Profile | null> {
   // RLS restricts this to the caller's own row, so no filter is strictly
   // required — but being explicit keeps the intent readable.
-  const { data, error } = await supabase
-    .from('users')
-    .select('user_id, first_name, last_name, email, phone, active, roles(name)')
-    .eq('user_id', userId)
-    .maybeSingle()
+  // Both queries are independent, so they go together. In series they cost
+  // roughly 800ms on the critical path, and nothing renders until they land.
+  const [{ data, error }, { data: depts }] = await Promise.all([
+    supabase
+      .from('users')
+      .select('user_id, first_name, last_name, email, phone, active, roles(name)')
+      .eq('user_id', userId)
+      .maybeSingle(),
+    supabase.from('user_departments').select('department_id').eq('user_id', userId),
+  ])
 
   if (error || !data) return null
-
-  const { data: depts } = await supabase
-    .from('user_departments')
-    .select('department_id')
-    .eq('user_id', userId)
 
   const roleName = (data.roles as unknown as { name: string } | null)?.name
   return {
@@ -80,11 +80,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false)
     })
 
-    const { data: sub } = supabase.auth.onAuthStateChange(async (_event, next) => {
+    // The callback MUST stay synchronous and must not call supabase.
+    //
+    // supabase-js deadlocks if an async API call is made inside an
+    // onAuthStateChange handler: the next Supabase call anywhere on that
+    // client hangs forever. Deferring the profile fetch to a fresh task
+    // lets the auth lock release first.
+    // https://supabase.com/docs/guides/troubleshooting/why-is-my-supabase-api-call-not-returning-PGzXw0
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => {
       if (!active) return
       setSession(next)
-      setProfile(next ? await loadProfile(next.user.id) : null)
-      setLoading(false)
+
+      if (!next) {
+        setProfile(null)
+        setLoading(false)
+        return
+      }
+
+      setTimeout(() => {
+        if (!active) return
+        void loadProfile(next.user.id)
+          .then((p) => {
+            if (active) setProfile(p)
+          })
+          .finally(() => {
+            if (active) setLoading(false)
+          })
+      }, 0)
     })
 
     return () => {

@@ -1,0 +1,354 @@
+import { useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { supabase, ATTACHMENT_BUCKET } from '../lib/supabase'
+import { useAuth } from '../auth/AuthProvider'
+import { useLookups, statusIdByName } from '../lib/useLookups'
+import { ErrorNote, Loading, Modal, Spinner } from '../components/ui'
+import {
+  CAMPUS_SAFETY_PHONE,
+  EMERGENCY_PHONE,
+  detectEmergency,
+} from '../lib/emergency'
+import {
+  ACCEPTED_IMAGE_TYPES,
+  MAX_ATTACHMENT_BYTES,
+  MIN_DESCRIPTION_LENGTH,
+  STATUS,
+} from '../lib/domain'
+import { classifyTicket } from '../lib/classify'
+import { formatBytes } from '../lib/format'
+
+export default function SubmitTicketPage() {
+  const nav = useNavigate()
+  const { profile } = useAuth()
+  const { lookups, ready } = useLookups()
+
+  const [title, setTitle] = useState('')
+  const [description, setDescription] = useState('')
+  const [issueTypeId, setIssueTypeId] = useState<string>('')
+  const [buildingId, setBuildingId] = useState<string>('')
+  const [floorId, setFloorId] = useState<string>('')
+  const [areaTypeId, setAreaTypeId] = useState<string>('')
+  const [roomNumber, setRoomNumber] = useState('')
+  const [file, setFile] = useState<File | null>(null)
+
+  const [error, setError] = useState<unknown>(null)
+  const [busy, setBusy] = useState(false)
+  const [emergencyAck, setEmergencyAck] = useState(false)
+  const [showEmergency, setShowEmergency] = useState(false)
+
+  const floorsForBuilding = useMemo(
+    () => lookups.floors.filter((f) => String(f.building_id) === buildingId),
+    [lookups.floors, buildingId],
+  )
+
+  const emergency = useMemo(
+    () => detectEmergency(title, description),
+    [title, description],
+  )
+
+  const descriptionTooShort =
+    description.trim().length > 0 && description.trim().length < MIN_DESCRIPTION_LENGTH
+
+  function validateFile(f: File): string | null {
+    if (!ACCEPTED_IMAGE_TYPES.includes(f.type)) {
+      return `${f.name} is not a supported image type. Use JPEG, PNG, WebP, GIF, or HEIC.`
+    }
+    if (f.size > MAX_ATTACHMENT_BYTES) {
+      return `${f.name} is ${formatBytes(f.size)}. The limit is ${formatBytes(MAX_ATTACHMENT_BYTES)}.`
+    }
+    return null
+  }
+
+  function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0] ?? null
+    setError(null)
+    if (!f) return setFile(null)
+    const problem = validateFile(f)
+    if (problem) {
+      setError(new Error(problem))
+      e.target.value = ''
+      return setFile(null)
+    }
+    setFile(f)
+  }
+
+  async function reallySubmit() {
+    if (!profile) return
+    setBusy(true)
+    setError(null)
+
+    try {
+      // 1. Optional location. A ticket without a precise location is still
+      //    valid; an outdoor issue has no floor at all.
+      let locationId: number | null = null
+      if (floorId || roomNumber.trim() || areaTypeId) {
+        const { data: loc, error: locErr } = await supabase
+          .from('locations')
+          .insert({
+            floor_id: floorId ? Number(floorId) : null,
+            area_type_id: areaTypeId ? Number(areaTypeId) : null,
+            room_number: roomNumber.trim() || null,
+          })
+          .select('location_id')
+          .single()
+        // A location failure must not cost the user their report.
+        if (!locErr && loc) locationId = loc.location_id
+      }
+
+      const newStatus = statusIdByName(lookups, STATUS.NEW)
+      if (!newStatus) throw new Error('Status table is not seeded. Contact an administrator.')
+
+      // 2. Create the ticket. THIS IS THE COMMIT POINT. Everything after
+      //    this may fail without costing the user their submission.
+      const { data: ticket, error: ticketErr } = await supabase
+        .from('tickets')
+        .insert({
+          reported_by: profile.user_id,
+          original_text: description.trim(),
+          title: title.trim(),
+          description: description.trim(),
+          issue_type_id: issueTypeId ? Number(issueTypeId) : null,
+          location_id: locationId,
+          status_id: newStatus,
+          is_emergency: emergency.isEmergency,
+        })
+        .select('ticket_id')
+        .single()
+
+      if (ticketErr) throw ticketErr
+      const ticketId = ticket.ticket_id
+
+      // 3. Attachment. Best effort.
+      if (file) {
+        const ext = file.name.split('.').pop() ?? 'jpg'
+        const path = `${ticketId}/${crypto.randomUUID()}.${ext}`
+        const { error: upErr } = await supabase.storage
+          .from(ATTACHMENT_BUCKET)
+          .upload(path, file, { contentType: file.type, upsert: false })
+
+        if (!upErr) {
+          await supabase.from('attachments').insert({
+            ticket_id: ticketId,
+            uploaded_by: profile.user_id,
+            file_name: file.name,
+            file_url: path,
+            file_type: file.type,
+            file_size_bytes: file.size,
+          })
+        }
+      }
+
+      // 4. Classification. Deliberately last, deliberately swallowed.
+      //    An AI outage degrades routing quality; it never costs a ticket.
+      void classifyTicket(ticketId).catch(() => undefined)
+
+      nav(`/tickets/${ticketId}`)
+    } catch (err) {
+      setError(err)
+      setBusy(false)
+    }
+  }
+
+  function onSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (emergency.isEmergency && !emergencyAck) {
+      setShowEmergency(true)
+      return
+    }
+    void reallySubmit()
+  }
+
+  if (!ready) return <Loading />
+
+  return (
+    <div className="content narrow">
+      <h1>Report an issue</h1>
+      <p className="muted small">
+        Tell us what's wrong and where. You'll get updates as it's worked on.
+      </p>
+
+      <ErrorNote error={error} />
+
+      {emergency.isEmergency && (
+        <div className="alert error" role="alert">
+          <strong>This may be an emergency.</strong> If anyone is in danger, call{' '}
+          <strong>{EMERGENCY_PHONE}</strong> or Campus Safety at{' '}
+          <strong>{CAMPUS_SAFETY_PHONE}</strong> now. Do not wait for a ticket.
+        </div>
+      )}
+
+      <form onSubmit={onSubmit} className="card">
+        <div className="field">
+          <label htmlFor="title">What's the problem?</label>
+          <input
+            id="title"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            required
+            maxLength={120}
+            placeholder="Radiator won't turn off"
+          />
+        </div>
+
+        <div className="field">
+          <label htmlFor="desc">Describe it</label>
+          <textarea
+            id="desc"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            required
+            minLength={MIN_DESCRIPTION_LENGTH}
+            placeholder="The radiator in my room has been stuck on since Friday. The room is about 85 degrees and the valve won't turn."
+          />
+          <div className="hint">
+            {descriptionTooShort
+              ? `A bit more detail, please — at least ${MIN_DESCRIPTION_LENGTH} characters so we can route this correctly.`
+              : 'Include what you see, when it started, and anything you already tried.'}
+          </div>
+        </div>
+
+        <div className="field">
+          <label htmlFor="type">Category</label>
+          <select
+            id="type"
+            value={issueTypeId}
+            onChange={(e) => setIssueTypeId(e.target.value)}
+          >
+            <option value="">Not sure — let CampusFix decide</option>
+            {lookups.issueTypes.map((it) => (
+              <option key={it.issue_type_id} value={it.issue_type_id}>
+                {it.name}
+              </option>
+            ))}
+          </select>
+          <div className="hint">
+            Picking a category routes your ticket immediately. Leaving it blank sends it for
+            review.
+          </div>
+        </div>
+
+        <h3 style={{ marginTop: '1.25rem' }}>Where is it?</h3>
+
+        <div className="row">
+          <div className="field">
+            <label htmlFor="building">Building</label>
+            <select
+              id="building"
+              value={buildingId}
+              onChange={(e) => {
+                setBuildingId(e.target.value)
+                setFloorId('')
+              }}
+            >
+              <option value="">Select…</option>
+              {lookups.buildings.map((b) => (
+                <option key={b.building_id} value={b.building_id}>
+                  {b.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="field">
+            <label htmlFor="floor">Floor</label>
+            <select
+              id="floor"
+              value={floorId}
+              onChange={(e) => setFloorId(e.target.value)}
+              disabled={!buildingId}
+            >
+              <option value="">Select…</option>
+              {floorsForBuilding.map((f) => (
+                <option key={f.floor_id} value={f.floor_id}>
+                  {f.floor_number}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="row">
+          <div className="field">
+            <label htmlFor="room">Room or nearest landmark</label>
+            <input
+              id="room"
+              value={roomNumber}
+              onChange={(e) => setRoomNumber(e.target.value)}
+              placeholder="312"
+            />
+          </div>
+
+          <div className="field">
+            <label htmlFor="area">Area type</label>
+            <select
+              id="area"
+              value={areaTypeId}
+              onChange={(e) => setAreaTypeId(e.target.value)}
+            >
+              <option value="">Select…</option>
+              {lookups.areaTypes.map((a) => (
+                <option key={a.area_type_id} value={a.area_type_id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="field">
+          <label htmlFor="photo">Photo (optional)</label>
+          <input
+            id="photo"
+            type="file"
+            accept={ACCEPTED_IMAGE_TYPES.join(',')}
+            onChange={onPickFile}
+          />
+          <div className="hint">
+            JPEG, PNG, WebP, GIF, or HEIC. Up to {formatBytes(MAX_ATTACHMENT_BYTES)}.
+            {file && ` Selected: ${file.name} (${formatBytes(file.size)})`}
+          </div>
+        </div>
+
+        <button className="primary" type="submit" disabled={busy || descriptionTooShort}>
+          {busy ? <Spinner /> : 'Submit ticket'}
+        </button>
+      </form>
+
+      {showEmergency && (
+        <Modal title="This looks like an emergency" onClose={() => setShowEmergency(false)}>
+          <div className="alert error">
+            We detected {emergency.reasons.join(', ')} in your report.
+          </div>
+          <p>
+            <strong>A ticket is not an emergency response.</strong> Nobody is watching this
+            queue right now.
+          </p>
+          <p>
+            If anyone is in danger, call <strong>{EMERGENCY_PHONE}</strong>. For campus
+            incidents, call Campus Safety at <strong>{CAMPUS_SAFETY_PHONE}</strong>.
+          </p>
+          <p className="small muted">
+            You can still file this for the record. It will be flagged as an emergency and
+            sent to Campus Safety at the highest priority.
+          </p>
+          <div className="actions">
+            <button className="primary" onClick={() => setShowEmergency(false)} type="button">
+              Go back
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setEmergencyAck(true)
+                setShowEmergency(false)
+                void reallySubmit()
+              }}
+            >
+              I've called — file the report
+            </button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  )
+}

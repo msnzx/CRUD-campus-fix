@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { supabase, ATTACHMENT_BUCKET } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
 import { nameById, statusIdByName, statusNameById, useLookups } from '../lib/useLookups'
@@ -24,6 +24,11 @@ export default function TicketDetailPage() {
   const { id } = useParams()
   const ticketId = Number(id)
   const nav = useNavigate()
+  const routerLocation = useLocation()
+  // Set by the submit page when the location row could not be written.
+  const locationFailed = Boolean(
+    (routerLocation.state as { locationFailed?: boolean } | null)?.locationFailed,
+  )
   const { profile, isStaff, isAdmin } = useAuth()
   const { lookups, ready } = useLookups()
 
@@ -297,6 +302,13 @@ export default function TicketDetailPage() {
       </div>
 
       <ErrorNote error={error} />
+
+      {locationFailed && (
+        <div className="alert warn">
+          The ticket was created, but its location could not be saved. Ask staff to set
+          the building on the ticket so it appears on the campus map.
+        </div>
+      )}
 
       {ticket.ai_routing_status === 'FAILED' && (
         <div className="alert warn">

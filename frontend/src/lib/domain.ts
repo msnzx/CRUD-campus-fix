@@ -78,3 +78,9 @@ export const ACCEPTED_IMAGE_TYPES = [
 ]
 
 export const MIN_DESCRIPTION_LENGTH = 20
+
+// A building-level location whose floor is unknown. The hierarchy is
+// buildings -> floors -> locations, so a location reaches its building only
+// through a floor; without this sentinel, "somewhere in Werner Hall" cannot
+// be stored and the building is silently lost.
+export const UNSPECIFIED_FLOOR = 'Unspecified'

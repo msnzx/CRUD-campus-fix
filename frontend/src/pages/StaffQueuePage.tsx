@@ -96,7 +96,10 @@ export default function StaffQueuePage() {
   if (error) return <div className="content"><ErrorNote error={error} /></div>
   if (!tickets || !ready) return <Loading />
 
-  const buildingNames = [...new Set(Object.values(ticketBuilding))].sort()
+  // Every building, not only those that already have a located ticket.
+  // Deriving this from tickets left the filter empty whenever nothing had a
+  // location yet, which looked like the filter was broken.
+  const buildingNames = lookups.buildings.map((b) => b.name)
 
   return (
     <div className="content">

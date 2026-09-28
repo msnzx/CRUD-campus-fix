@@ -14,6 +14,7 @@ import {
   MAX_ATTACHMENT_BYTES,
   MIN_DESCRIPTION_LENGTH,
   STATUS,
+  UNSPECIFIED_FLOOR,
 } from '../lib/domain'
 import { classifyTicket } from '../lib/classify'
 import { formatBytes } from '../lib/format'
@@ -37,10 +38,13 @@ export default function SubmitTicketPage() {
   const [emergencyAck, setEmergencyAck] = useState(false)
   const [showEmergency, setShowEmergency] = useState(false)
 
-  const floorsForBuilding = useMemo(
-    () => lookups.floors.filter((f) => String(f.building_id) === buildingId),
-    [lookups.floors, buildingId],
-  )
+  // "Unspecified" first, then ground floor, then numbered floors in order.
+  const floorsForBuilding = useMemo(() => {
+    const rows = lookups.floors.filter((f) => String(f.building_id) === buildingId)
+    const rank = (n: string) =>
+      n === UNSPECIFIED_FLOOR ? -2 : n === 'G' ? -1 : Number(n)
+    return [...rows].sort((a, b) => rank(a.floor_number) - rank(b.floor_number))
+  }, [lookups.floors, buildingId])
 
   const emergency = useMemo(
     () => detectEmergency(title, description),
@@ -81,19 +85,44 @@ export default function SubmitTicketPage() {
     try {
       // 1. Optional location. A ticket without a precise location is still
       //    valid; an outdoor issue has no floor at all.
+      //
+      //    A building with no floor chosen must still record the building.
+      //    Since a location reaches its building only through a floor, fall
+      //    back to that building's "Unspecified" floor rather than dropping
+      //    the building on the floor, which is what used to happen.
       let locationId: number | null = null
-      if (floorId || roomNumber.trim() || areaTypeId) {
+      let locationFailed = false
+
+      let effectiveFloorId: number | null = floorId ? Number(floorId) : null
+      if (effectiveFloorId === null && buildingId) {
+        effectiveFloorId =
+          lookups.floors.find(
+            (f) =>
+              String(f.building_id) === buildingId &&
+              f.floor_number === UNSPECIFIED_FLOOR,
+          )?.floor_id ?? null
+      }
+
+      if (effectiveFloorId !== null || roomNumber.trim() || areaTypeId) {
         const { data: loc, error: locErr } = await supabase
           .from('locations')
           .insert({
-            floor_id: floorId ? Number(floorId) : null,
+            floor_id: effectiveFloorId,
             area_type_id: areaTypeId ? Number(areaTypeId) : null,
             room_number: roomNumber.trim() || null,
           })
           .select('location_id')
           .single()
-        // A location failure must not cost the user their report.
-        if (!locErr && loc) locationId = loc.location_id
+
+        if (locErr) {
+          // A location failure must not cost the user their report, but it
+          // must not be invisible either. Swallowing this is what left every
+          // ticket unplaceable on the map.
+          locationFailed = true
+          console.error('Could not save ticket location:', locErr)
+        } else if (loc) {
+          locationId = loc.location_id
+        }
       }
 
       const newStatus = statusIdByName(lookups, STATUS.NEW)
@@ -143,7 +172,7 @@ export default function SubmitTicketPage() {
       //    An AI outage degrades routing quality; it never costs a ticket.
       void classifyTicket(ticketId).catch(() => undefined)
 
-      nav(`/tickets/${ticketId}`)
+      nav(`/tickets/${ticketId}`, { state: { locationFailed } })
     } catch (err) {
       setError(err)
       setBusy(false)
@@ -261,7 +290,11 @@ export default function SubmitTicketPage() {
               <option value="">Select…</option>
               {floorsForBuilding.map((f) => (
                 <option key={f.floor_id} value={f.floor_id}>
-                  {f.floor_number}
+                  {f.floor_number === UNSPECIFIED_FLOOR
+                    ? "Not sure / anywhere in the building"
+                    : f.floor_number === 'G'
+                      ? 'Ground floor'
+                      : `Floor ${f.floor_number}`}
                 </option>
               ))}
             </select>

@@ -93,14 +93,14 @@ Closed by migration:
 - **`updated_at` triggers** — `set_updated_at()` on `users`, `departments`, `tickets`, `comments`.
 - **One pending reopen per ticket** — `ux_one_pending_reopen`.
 - **`tickets.is_emergency`** — emergency handling is now auditable, not just a UI warning.
-- **Seed data** — `issue_types` (33), `area_types` (15), `student_types` (5), `buildings` (6), `floors` (24).
+- **Seed data** — `issue_types` (33), `area_types` (15), `student_types` (5), `buildings` (9 real Caldwell buildings), `floors` (36).
 - **`student_types`** — given a purpose: analytics segmentation of the requester population.
 
 Still open:
 
 1. **`locations.floor_id` stays nullable**, deliberately — outdoor locations such as a parking lot have no floor. `verification.md` V-030 was rewritten to assert referential validity when present rather than requiring presence.
 2. **No routing-rules table.** Deferred to stretch. `issue_types.default_department_id` covers MVP routing.
-3. **Buildings are placeholders.** Replace with the real Caldwell list before generating demo data.
+3. **Buildings have no coordinates.** All nine real buildings are seeded, but `buildings.latitude`/`longitude` are NULL. The campus map cannot plot a building until they are filled in.
 4. **`users.email` has a `CHECK (email LIKE '%@caldwell.edu')`.** This runs inside the signup trigger, so a non-Caldwell signup fails the whole `auth.users` insert with an opaque error. Surface a clear message in the UI, and note that test accounts must use a `@caldwell.edu` address.
 
 ## Verified Security Behavior

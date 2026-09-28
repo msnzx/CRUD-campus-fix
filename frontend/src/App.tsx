@@ -8,6 +8,7 @@ import MyTicketsPage from './pages/MyTicketsPage'
 import TicketDetailPage from './pages/TicketDetailPage'
 import StaffQueuePage from './pages/StaffQueuePage'
 import AnalyticsPage from './pages/AnalyticsPage'
+import CampusMapPage from './pages/CampusMapPage'
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { session, loading } = useAuth()
@@ -38,6 +39,7 @@ function Chrome({ children }: { children: ReactNode }) {
           <NavLink to="/submit">Report an issue</NavLink>
           <NavLink to="/tickets">My tickets</NavLink>
           {isStaff && <NavLink to="/queue">Queue</NavLink>}
+          {isStaff && <NavLink to="/map">Map</NavLink>}
           {isAdmin && <NavLink to="/analytics">Analytics</NavLink>}
         </nav>
         {profile && (
@@ -103,6 +105,14 @@ export default function App() {
           element={
             <RequireStaff>
               <StaffQueuePage />
+            </RequireStaff>
+          }
+        />
+        <Route
+          path="/map"
+          element={
+            <RequireStaff>
+              <CampusMapPage />
             </RequireStaff>
           }
         />

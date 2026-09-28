@@ -57,9 +57,30 @@ export type Database = {
         ]
       }
       buildings: {
-        Row: { building_id: number; name: string }
-        Insert: { building_id?: number; name: string }
-        Update: { building_id?: number; name?: string }
+        Row: {
+          building_id: number
+          name: string
+          latitude: number | null
+          longitude: number | null
+          map_x: number | null
+          map_y: number | null
+        }
+        Insert: {
+          building_id?: number
+          name: string
+          latitude?: number | null
+          longitude?: number | null
+          map_x?: number | null
+          map_y?: number | null
+        }
+        Update: {
+          building_id?: number
+          name?: string
+          latitude?: number | null
+          longitude?: number | null
+          map_x?: number | null
+          map_y?: number | null
+        }
         Relationships: []
       }
       comments: {

@@ -62,6 +62,27 @@ The schema is already applied to the hosted project. Migrations live in
 `supabase/migrations/` and are the source of truth. Never edit schema through
 the dashboard; write a migration.
 
+## Campus map
+
+The map page renders a static campus image with a pin per building. Save the
+campus map as:
+
+```
+frontend/public/campus-map.png
+```
+
+Pin positions live in `buildings.map_x` / `map_y` as **percentages of the image**,
+not pixels, so they stay correct at any screen size and survive the image being
+re-exported larger or smaller. They are seeded from the official campus map
+legend, but they are estimates read off the artwork.
+
+To correct one: sign in as a SYSTEM_ADMIN, open **Map**, press **Move** beside a
+building, then click where the pin belongs.
+
+If the image is cropped differently from the version the pins were seeded
+against (for instance with the legend removed), every pin will be offset the
+same way and each needs repositioning once.
+
 ## Granting staff access
 
 Every new account is created as a `STUDENT`. Roles are never self-assigned —

@@ -267,3 +267,70 @@ button.sm { padding: 0.3rem 0.6rem; font-size: 0.82rem; }
   .who { display: none; }
   .bar-row .bar-label { width: 96px; }
 }
+
+/* ---------- campus map ---------- */
+
+.map-wrap {
+  position: relative;
+  width: 100%;
+  line-height: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+.map-wrap.placing { cursor: crosshair; }
+.map-wrap img { width: 100%; height: auto; display: block; }
+
+/* Pins are positioned as a percentage of the image, so they stay correct at
+   any rendered width without recalculating anything. */
+.map-pin {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.3rem 0.15rem 0.15rem;
+  border-radius: 999px;
+  border: 2px solid var(--surface);
+  background: var(--surface);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+.map-pin:hover, .map-pin.active { z-index: 5; }
+.map-pin.active { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.map-pin-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+  background: #6b7280;
+}
+.map-pin.accent .map-pin-count { background: var(--accent); color: var(--accent-text); }
+.map-pin.danger .map-pin-count { background: #c0392b; color: #fff; }
+.map-pin.quiet  { opacity: 0.75; }
+
+.map-pin-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text);
+  padding-right: 0.2rem;
+  max-width: 108px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* On a phone the labels collide; show counts only and let the list below
+   carry the names. */
+@media (max-width: 720px) {
+  .map-pin-label { display: none; }
+  .map-pin { padding: 0; border-width: 1.5px; }
+}

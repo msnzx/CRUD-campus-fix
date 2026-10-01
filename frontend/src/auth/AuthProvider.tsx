@@ -31,6 +31,8 @@ interface AuthValue {
     lastName: string
   }): Promise<{ needsConfirmation: boolean }>
   signOut(): Promise<void>
+  requestPasswordReset(email: string): Promise<void>
+  updatePassword(password: string): Promise<void>
   refreshProfile(): Promise<void>
 }
 
@@ -153,6 +155,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       async signOut() {
         await supabase.auth.signOut()
         setProfile(null)
+      },
+
+      async requestPasswordReset(email) {
+        // The link lands on /reset-password with a recovery session in the
+        // URL hash. That URL must be in the project's Auth redirect allowlist,
+        // or Supabase silently falls back to the Site URL.
+        const { error } = await supabase.auth.resetPasswordForEmail(email, {
+          redirectTo: `${window.location.origin}/reset-password`,
+        })
+        if (error) throw error
+      },
+
+      async updatePassword(password) {
+        const { error } = await supabase.auth.updateUser({ password })
+        if (error) throw error
       },
 
       async refreshProfile() {

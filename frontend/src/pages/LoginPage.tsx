@@ -1,10 +1,18 @@
 import { useState } from 'react'
 import { useAuth } from '../auth/AuthProvider'
-import { ErrorNote, Spinner } from '../components/ui'
+import { BrandMark, ErrorNote, Spinner } from '../components/ui'
+
+type Mode = 'signin' | 'signup' | 'forgot'
+
+const SUBMIT_LABEL: Record<Mode, string> = {
+  signin: 'Sign in →',
+  signup: 'Create account →',
+  forgot: 'Send reset link →',
+}
 
 export default function LoginPage() {
-  const { signIn, signUp } = useAuth()
-  const [mode, setMode] = useState<'signin' | 'signup'>('signin')
+  const { signIn, signUp, requestPasswordReset } = useAuth()
+  const [mode, setMode] = useState<Mode>('signin')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [firstName, setFirstName] = useState('')
@@ -21,6 +29,13 @@ export default function LoginPage() {
     try {
       if (mode === 'signin') {
         await signIn(email.trim(), password)
+      } else if (mode === 'forgot') {
+        await requestPasswordReset(email.trim())
+        // Same message whether or not the account exists, so this form
+        // can't be used to probe which addresses are registered.
+        setNotice(
+          'If an account exists for that address, a reset link is on its way. Check your inbox.',
+        )
       } else {
         const { needsConfirmation } = await signUp({
           email: email.trim(),
@@ -40,34 +55,49 @@ export default function LoginPage() {
     }
   }
 
-  return (
-    <div className="content narrow" style={{ paddingTop: '3rem' }}>
-      <h1>CampusFix</h1>
-      <p className="muted">Report and track campus issues.</p>
+  function switchMode(next: Mode) {
+    setMode(next)
+    setError(null)
+    setNotice(null)
+  }
 
-      <div className="card">
-        <div className="actions" style={{ marginBottom: '1rem' }}>
-          <button
-            className={mode === 'signin' ? 'primary sm' : 'sm'}
-            onClick={() => {
-              setMode('signin')
-              setError(null)
-            }}
-            type="button"
-          >
-            Sign in
-          </button>
-          <button
-            className={mode === 'signup' ? 'primary sm' : 'sm'}
-            onClick={() => {
-              setMode('signup')
-              setError(null)
-            }}
-            type="button"
-          >
-            Create account
-          </button>
+  return (
+    <div className="auth-page">
+      <div className="auth-card">
+        <div className="auth-logo">
+          <BrandMark size={64} />
         </div>
+        <h1>Welcome to CampusFix</h1>
+        <p className="auth-sub">Report and track campus issues at Caldwell University.</p>
+
+        {mode === 'forgot' ? (
+          <div className="tabs">
+            <button type="button" className="active">
+              Reset password
+            </button>
+          </div>
+        ) : (
+          <div className="tabs" role="tablist">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === 'signin'}
+              className={mode === 'signin' ? 'active' : ''}
+              onClick={() => switchMode('signin')}
+            >
+              Sign in
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === 'signup'}
+              className={mode === 'signup' ? 'active' : ''}
+              onClick={() => switchMode('signup')}
+            >
+              Create account
+            </button>
+          </div>
+        )}
 
         <ErrorNote error={error} />
         {notice && <div className="alert ok">{notice}</div>}
@@ -109,32 +139,54 @@ export default function LoginPage() {
               autoComplete="email"
               placeholder="you@caldwell.edu"
             />
-            <div className="hint">Accounts must use a @caldwell.edu address.</div>
+            <div className="hint">
+              {mode === 'forgot'
+                ? "We'll email you a link to choose a new password."
+                : 'Accounts must use a @caldwell.edu address.'}
+            </div>
           </div>
 
-          <div className="field">
-            <label htmlFor="password">Password</label>
-            <input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              minLength={8}
-              autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
-            />
-          </div>
+          {mode !== 'forgot' && (
+            <div className="field">
+              <div className="label-row">
+                <label htmlFor="password">Password</label>
+                {mode === 'signin' && (
+                  <button type="button" className="link" onClick={() => switchMode('forgot')}>
+                    Forgot password?
+                  </button>
+                )}
+              </div>
+              <input
+                id="password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                minLength={8}
+                placeholder="Enter your password"
+                autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
+              />
+            </div>
+          )}
 
-          <button className="primary" type="submit" disabled={busy}>
-            {busy ? <Spinner /> : mode === 'signin' ? 'Sign in' : 'Create account'}
+          <button className="primary block" type="submit" disabled={busy}>
+            {busy ? <Spinner /> : SUBMIT_LABEL[mode]}
           </button>
         </form>
-      </div>
 
-      <p className="small muted">
-        New accounts are created as students. Staff and administrator access is granted by a
-        system administrator.
-      </p>
+        {mode === 'forgot' && (
+          <p className="auth-foot">
+            <button type="button" className="link" onClick={() => switchMode('signin')}>
+              ← Back to sign in
+            </button>
+          </p>
+        )}
+
+        <p className="auth-foot">
+          New accounts are created as students. Staff and administrator access is granted by a
+          system administrator.
+        </p>
+      </div>
     </div>
   )
 }

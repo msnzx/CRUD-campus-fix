@@ -44,6 +44,52 @@ function BarList({ title, data, empty }: { title: string; data: Bucket[]; empty:
   )
 }
 
+/**
+ * Change over time: one column per week, oldest on the left, one hue. The
+ * busiest week and the latest week are labelled; every column has a tooltip.
+ */
+function WeeklyColumns({ title, data }: { title: string; data: Bucket[] }) {
+  const max = Math.max(1, ...data.map((d) => d.count))
+  const peak = data.reduce((best, d, i) => (d.count > data[best].count ? i : best), 0)
+  return (
+    <div className="card">
+      <h3>{title}</h3>
+      <div className="cols" role="img" aria-label={`${title}: ${data.map((d) => `${d.label} ${d.count}`).join(', ')}`}>
+        {data.map((d, i) => (
+          <div className="col" key={d.label} title={`Week of ${d.label}: ${d.count} tickets`}>
+            <div className="col-value">{i === peak || i === data.length - 1 ? d.count : ''}</div>
+            <div className="col-bar" style={{ height: `${(d.count / max) * 100}%` }} />
+          </div>
+        ))}
+      </div>
+      <div className="cols-axis">
+        <span>{data[0]?.label}</span>
+        <span>{data[data.length - 1]?.label}</span>
+      </div>
+    </div>
+  )
+}
+
+function weeklyVolume(tickets: Tables<'tickets'>[], weeks = 12): Bucket[] {
+  const day = 86_400_000
+  const now = new Date()
+  // Weeks start on Monday, local time.
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  start.setDate(start.getDate() - ((start.getDay() + 6) % 7) - (weeks - 1) * 7)
+  const buckets: Bucket[] = Array.from({ length: weeks }, (_, i) => ({
+    label: new Date(start.getTime() + i * 7 * day).toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+    }),
+    count: 0,
+  }))
+  for (const t of tickets) {
+    const i = Math.floor((new Date(t.created_at).getTime() - start.getTime()) / (7 * day))
+    if (i >= 0 && i < weeks) buckets[i].count++
+  }
+  return buckets
+}
+
 function Stat({ value, label }: { value: string | number; label: string }) {
   return (
     <div className="stat">
@@ -65,6 +111,7 @@ export default function AnalyticsPage() {
   const { lookups, ready } = useLookups()
   const [tickets, setTickets] = useState<Tables<'tickets'>[] | null>(null)
   const [buildingByTicket, setBuildingByTicket] = useState<Record<number, string>>({})
+  const [placeByTicket, setPlaceByTicket] = useState<Record<number, string>>({})
   const [error, setError] = useState<unknown>(null)
 
   useEffect(() => {
@@ -84,21 +131,33 @@ export default function AnalyticsPage() {
         if (locationIds.length === 0) return
         const { data: locs } = await supabase
           .from('locations')
-          .select('location_id, floors(buildings(name))')
+          .select('location_id, room_number, floors(buildings(name))')
           .in('location_id', locationIds)
 
         const byLocation = new Map<number, string>()
+        const placeByLocation = new Map<number, string>()
         for (const l of locs ?? []) {
           const floor = l.floors as unknown as { buildings: { name: string } | null } | null
-          if (floor?.buildings?.name) byLocation.set(l.location_id, floor.buildings.name)
+          const building = floor?.buildings?.name
+          if (building) byLocation.set(l.location_id, building)
+          // A "place" is building + room: the grain at which a repeat fault
+          // points to something worth fixing properly.
+          if (building && l.room_number) {
+            placeByLocation.set(l.location_id, `${building} · Room ${l.room_number}`)
+          }
         }
         const map: Record<number, string> = {}
+        const places: Record<number, string> = {}
         for (const t of data) {
           if (t.location_id && byLocation.has(t.location_id)) {
             map[t.ticket_id] = byLocation.get(t.location_id)!
           }
+          if (t.location_id && placeByLocation.has(t.location_id)) {
+            places[t.ticket_id] = placeByLocation.get(t.location_id)!
+          }
         }
         setBuildingByTicket(map)
+        setPlaceByTicket(places)
       })
   }, [])
 
@@ -148,8 +207,14 @@ export default function AnalyticsPage() {
       byBuilding: tally(
         tickets.map((t) => buildingByTicket[t.ticket_id] ?? 'No location given'),
       ),
+      weekly: weeklyVolume(tickets),
+      recurring: tally(
+        tickets.map((t) => placeByTicket[t.ticket_id]).filter((p): p is string => !!p),
+      )
+        .filter((b) => b.count >= 2)
+        .slice(0, 10),
     }
-  }, [tickets, lookups, buildingByTicket])
+  }, [tickets, lookups, buildingByTicket, placeByTicket])
 
   if (error) return <div className="content"><ErrorNote error={error} /></div>
   if (!tickets || !ready || !metrics) return <Loading />
@@ -186,10 +251,16 @@ export default function AnalyticsPage() {
         <Stat value={metrics.emergencies} label="Flagged emergency" />
       </div>
 
+      <WeeklyColumns title="New tickets per week (last 12 weeks)" data={metrics.weekly} />
       <BarList title="Tickets by department" data={metrics.byDepartment} empty="No departments assigned yet." />
       <BarList title="Tickets by status" data={metrics.byStatus} empty="No statuses recorded." />
       <BarList title="Top categories" data={metrics.byCategory} empty="No categories assigned yet." />
       <BarList title="Tickets by building" data={metrics.byBuilding} empty="No locations recorded." />
+      <BarList
+        title="Recurring locations (2+ tickets in the same room)"
+        data={metrics.recurring}
+        empty="No room has had more than one ticket."
+      />
     </div>
   )
 }

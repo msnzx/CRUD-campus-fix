@@ -33,18 +33,20 @@ export const STAFF_ROLES: RoleName[] = [
 
 export const ADMIN_ROLES: RoleName[] = [ROLE.DEPARTMENT_ADMIN, ROLE.SYSTEM_ADMIN]
 
-// Legal status transitions, enforced in the UI. The database and the service
-// layer enforce this independently; this exists so staff aren't offered a
-// button that will fail.
+// Legal status transitions. The database enforces the same table in
+// private.status_transition_allowed() (migration ticket_workflow); change both
+// together. This copy exists so staff are only offered buttons that work.
+// RESOLVED -> REOPENED is absent on purpose: it happens only when an admin
+// approves a reopen request.
 export const ALLOWED_TRANSITIONS: Record<string, StatusName[]> = {
   [STATUS.NEW]: [STATUS.NEEDS_REVIEW, STATUS.ASSIGNED],
   [STATUS.AI_PROCESSING]: [STATUS.NEEDS_REVIEW, STATUS.ASSIGNED],
   [STATUS.NEEDS_REVIEW]: [STATUS.ASSIGNED],
-  [STATUS.ASSIGNED]: [STATUS.IN_PROGRESS, STATUS.NEEDS_REVIEW],
+  [STATUS.ASSIGNED]: [STATUS.IN_PROGRESS, STATUS.NEEDS_REVIEW, STATUS.RESOLVED],
   [STATUS.IN_PROGRESS]: [STATUS.WAITING_FOR_USER, STATUS.RESOLVED],
   [STATUS.WAITING_FOR_USER]: [STATUS.IN_PROGRESS, STATUS.RESOLVED],
-  [STATUS.RESOLVED]: [STATUS.CLOSED, STATUS.REOPENED],
-  [STATUS.REOPENED]: [STATUS.IN_PROGRESS],
+  [STATUS.RESOLVED]: [STATUS.CLOSED],
+  [STATUS.REOPENED]: [STATUS.ASSIGNED, STATUS.IN_PROGRESS, STATUS.RESOLVED],
   [STATUS.CLOSED]: [],
 }
 

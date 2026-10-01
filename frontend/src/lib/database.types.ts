@@ -531,6 +531,31 @@ export type Database = {
     }
     Views: Record<never, never>
     Functions: {
+      admin_set_user_active: {
+        Args: { p_active: boolean; p_user_id: string }
+        Returns: undefined
+      }
+      admin_set_user_role: {
+        Args: { p_role: string; p_user_id: string }
+        Returns: undefined
+      }
+      assign_ticket: {
+        Args: { p_assignee: string; p_ticket_id: number }
+        Returns: undefined
+      }
+      decide_reopen: {
+        Args: { p_approve: boolean; p_note?: string; p_request_id: number }
+        Returns: undefined
+      }
+      set_department_member: {
+        Args: { p_department_id: number; p_member: boolean; p_user_id: string }
+        Returns: undefined
+      }
+      transfer_ticket: {
+        Args: { p_department_id: number; p_reason?: string; p_ticket_id: number }
+        Returns: undefined
+      }
+      unassign_ticket: { Args: { p_ticket_id: number }; Returns: undefined }
       withdraw_own_ticket: { Args: { p_ticket_id: number }; Returns: undefined }
     }
     Enums: Record<never, never>

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { supabase, ATTACHMENT_BUCKET } from '../lib/supabase'
+import { supabase } from '../lib/supabase'
+import { uploadAttachment, validateImage } from '../lib/attachments'
 import { useAuth } from '../auth/AuthProvider'
 import { useLookups, statusIdByName } from '../lib/useLookups'
 import { ErrorNote, Loading, Modal, Spinner } from '../components/ui'
@@ -54,21 +55,11 @@ export default function SubmitTicketPage() {
   const descriptionTooShort =
     description.trim().length > 0 && description.trim().length < MIN_DESCRIPTION_LENGTH
 
-  function validateFile(f: File): string | null {
-    if (!ACCEPTED_IMAGE_TYPES.includes(f.type)) {
-      return `${f.name} is not a supported image type. Use JPEG, PNG, WebP, GIF, or HEIC.`
-    }
-    if (f.size > MAX_ATTACHMENT_BYTES) {
-      return `${f.name} is ${formatBytes(f.size)}. The limit is ${formatBytes(MAX_ATTACHMENT_BYTES)}.`
-    }
-    return null
-  }
-
   function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0] ?? null
     setError(null)
     if (!f) return setFile(null)
-    const problem = validateFile(f)
+    const problem = validateImage(f)
     if (problem) {
       setError(new Error(problem))
       e.target.value = ''
@@ -148,23 +139,14 @@ export default function SubmitTicketPage() {
       if (ticketErr) throw ticketErr
       const ticketId = ticket.ticket_id
 
-      // 3. Attachment. Best effort.
+      // 3. Attachment. Best effort, but a failure is reported on the ticket
+      //    page rather than silently dropped.
+      let attachmentFailed = false
       if (file) {
-        const ext = file.name.split('.').pop() ?? 'jpg'
-        const path = `${ticketId}/${crypto.randomUUID()}.${ext}`
-        const { error: upErr } = await supabase.storage
-          .from(ATTACHMENT_BUCKET)
-          .upload(path, file, { contentType: file.type, upsert: false })
-
-        if (!upErr) {
-          await supabase.from('attachments').insert({
-            ticket_id: ticketId,
-            uploaded_by: profile.user_id,
-            file_name: file.name,
-            file_url: path,
-            file_type: file.type,
-            file_size_bytes: file.size,
-          })
+        const upErr = await uploadAttachment(ticketId, file, profile.user_id)
+        if (upErr) {
+          attachmentFailed = true
+          console.error('Could not upload photo:', upErr)
         }
       }
 
@@ -172,7 +154,7 @@ export default function SubmitTicketPage() {
       //    An AI outage degrades routing quality; it never costs a ticket.
       void classifyTicket(ticketId).catch(() => undefined)
 
-      nav(`/tickets/${ticketId}`, { state: { locationFailed } })
+      nav(`/tickets/${ticketId}`, { state: { locationFailed, attachmentFailed } })
     } catch (err) {
       setError(err)
       setBusy(false)
@@ -181,6 +163,16 @@ export default function SubmitTicketPage() {
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault()
+    // V-004: every ticket says where. Outdoor spots have no building, so an
+    // area type or a landmark is enough on its own.
+    if (!buildingId && !areaTypeId && !roomNumber.trim()) {
+      setError(
+        new Error(
+          'Tell us where the problem is: choose a building, or for outdoor issues pick an area type or name the nearest landmark.',
+        ),
+      )
+      return
+    }
     if (emergency.isEmergency && !emergencyAck) {
       setShowEmergency(true)
       return

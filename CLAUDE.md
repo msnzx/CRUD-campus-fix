@@ -115,9 +115,20 @@ Tested directly against the database with simulated JWTs, not through the UI:
 | Student edits own ticket directly | 0 rows; no UPDATE policy applies |
 | Student submits ticket pre-set to `URGENT` / `RESOLVED` | clamped to `NEW`, null priority, null department |
 | Anonymous (`anon`) reads tickets | permission denied |
-| `get_advisors(security)` | 0 findings |
+| `get_advisors(security)` | only the expected "callable SECURITY DEFINER" findings for the workflow RPCs, plus leaked-password protection (a dashboard toggle) |
 
-Re-run these after any migration that touches policies or grants.
+These, plus the workflow rules below, are automated in `supabase/tests/workflow_and_security.sql` (28 checks, runs in a transaction and rolls back). Re-run it after any migration that touches policies, grants, or triggers; every row must say PASS.
+
+## Workflow Enforcement
+
+Migration `ticket_workflow` moved the ticket lifecycle into the database, because the browser writes to Supabase directly and there is no other server-side choke point:
+
+- **Status transitions** are checked by the `enforce_ticket_update` trigger against `private.status_transition_allowed()`. `frontend/src/lib/domain.ts` `ALLOWED_TRANSITIONS` mirrors it for the UI; change both together. The trigger also sets `resolved_at` / `closed_at` from the status, so clients never set those.
+- **Multi-step actions are RPCs**, and the tables behind them have no direct write grant: `assign_ticket`, `unassign_ticket`, `transfer_ticket`, `decide_reopen`, `admin_set_user_role`, `admin_set_user_active`, `set_department_member`. Each re-checks the caller's role inside. The security advisor flags them as callable SECURITY DEFINER functions; that is intended.
+- **`ticket_history` is trigger-written only.** Clients cannot insert into it.
+- **Notifications** are inserted by triggers (status change, assignment, comment, reopen request/decision, emergency). Each insert is isolated so a failure never rolls back the ticket change. `backend/app/notify.py` emails PENDING rows when SMTP is configured and records delivery status and retries.
+- **Auto-close**: pg_cron job `campusfix-close-resolved` closes RESOLVED tickets 7 days after resolution unless a reopen request is pending.
+- Service-role callers (`auth.uid()` is null: the FastAPI backend, cron) skip the transition check and are trusted to keep the rules.
 
 ## Engineering Rules
 
@@ -132,7 +143,7 @@ Re-run these after any migration that touches policies or grants.
 - Validate image type and file size before upload; serve attachments through signed URLs only.
 - Avoid collecting unnecessary sensitive information.
 - Write to `ticket_history` for every important state and assignment change.
-- Enforce status transition rules in the service layer, not in database CHECK constraints.
+- Enforce status transition rules in the workflow trigger and RPCs (see Workflow Enforcement), not in CHECK constraints — the rules must stay editable in one function.
 - Use soft delete (`deleted_at`) for tickets. Administrators need the history for analytics and audit.
 
 ## Scope Discipline

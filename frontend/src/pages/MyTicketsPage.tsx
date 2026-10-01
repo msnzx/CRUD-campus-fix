@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
 import { useLookups, nameById, statusNameById } from '../lib/useLookups'
 import { Empty, ErrorNote, Loading, PriorityBadge, StatusBadge } from '../components/ui'
 import { formatRelative } from '../lib/format'
+import { OPEN_STATUSES } from '../lib/domain'
 import type { Tables } from '../lib/database.types'
 
 export default function MyTicketsPage() {
@@ -12,6 +13,8 @@ export default function MyTicketsPage() {
   const { lookups, ready } = useLookups()
   const [tickets, setTickets] = useState<Tables<'tickets'>[] | null>(null)
   const [error, setError] = useState<unknown>(null)
+  const [query, setQuery] = useState('')
+  const [show, setShow] = useState<'open' | 'done' | 'all'>('all')
 
   useEffect(() => {
     if (!profile) return
@@ -29,6 +32,20 @@ export default function MyTicketsPage() {
         else setTickets(data)
       })
   }, [profile])
+
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    return (tickets ?? []).filter((t) => {
+      const name = statusNameById(lookups, t.status_id)
+      const open = !!name && OPEN_STATUSES.includes(name)
+      if (show === 'open' && !open) return false
+      if (show === 'done' && open) return false
+      if (!q) return true
+      return `#${t.ticket_id} ${t.title} ${t.description ?? t.original_text}`
+        .toLowerCase()
+        .includes(q)
+    })
+  }, [tickets, lookups, query, show])
 
   if (error) return <div className="content"><ErrorNote error={error} /></div>
   if (!tickets || !ready) return <Loading />
@@ -50,13 +67,39 @@ export default function MyTicketsPage() {
         </Link>
       </div>
 
+      {tickets.length > 0 && (
+        <div className="card card-tight">
+          <div className="row">
+            <div style={{ flex: '3 1 220px' }}>
+              <label htmlFor="my-q">Search</label>
+              <input
+                id="my-q"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Ticket number, title, or description"
+              />
+            </div>
+            <div>
+              <label htmlFor="my-show">Show</label>
+              <select id="my-show" value={show} onChange={(e) => setShow(e.target.value as typeof show)}>
+                <option value="all">All tickets</option>
+                <option value="open">Open</option>
+                <option value="done">Resolved and closed</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      )}
+
       {tickets.length === 0 ? (
         <Empty
           title="You haven't reported anything yet"
           hint={<Link to="/submit">Report your first issue</Link>}
         />
+      ) : visible.length === 0 ? (
+        <Empty title="No tickets match" hint="Try a different search or show all tickets." />
       ) : (
-        tickets.map((t) => {
+        visible.map((t) => {
           const status = statusNameById(lookups, t.status_id)
           return (
             <Link key={t.ticket_id} to={`/tickets/${t.ticket_id}`} className="ticket-row">

@@ -1,6 +1,21 @@
+import { useEffect, useRef } from 'react'
 import type { ReactNode } from 'react'
 import { STATUS } from '../lib/domain'
 import { humanize } from '../lib/format'
+
+// The CU cougar mark. The artwork has a white background, so it always sits
+// on a white disc, including in dark mode.
+export function BrandMark({ size = 32 }: { size?: number }) {
+  return (
+    <img
+      src="/caldwell-logo.png"
+      alt=""
+      width={size}
+      height={size}
+      className="brand-mark"
+    />
+  )
+}
 
 export function Spinner() {
   return <span className="spinner" role="status" aria-label="Loading" />
@@ -72,6 +87,30 @@ export function Modal({
   children: ReactNode
   onClose: () => void
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null)
+  // Callers pass a fresh closure each render; keep the latest without
+  // re-running the mount effect, which would steal focus on every keystroke.
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+
+  // Escape closes; focus moves into the dialog on open and back to whatever
+  // opened it on close, so keyboard users are not stranded.
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null
+    const first = dialogRef.current?.querySelector<HTMLElement>(
+      'input, textarea, select, button, [href]',
+    )
+    first?.focus()
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCloseRef.current()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      opener?.focus()
+    }
+  }, [])
+
   return (
     <div
       className="modal-backdrop"
@@ -80,7 +119,7 @@ export function Modal({
       aria-label={title}
       onClick={onClose}
     >
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal" ref={dialogRef} onClick={(e) => e.stopPropagation()}>
         <h2>{title}</h2>
         {children}
       </div>

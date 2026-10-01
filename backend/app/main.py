@@ -5,13 +5,15 @@ reads and writes, where RLS enforces authorization. This service exists only
 for work that needs a secret or a model call:
 
   - AI classification and routing
-  - (future) notification delivery and retry
+  - email delivery and retry for notification rows (app/notify.py)
 
 Because it holds the service_role key it runs with RLS disabled, so every
 endpoint re-checks access explicitly. See app/auth.py.
 """
 
+import asyncio
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,13 +23,27 @@ from supabase import Client
 from .auth import Caller, admin_client, assert_can_access_ticket, current_caller
 from .classify import classify
 from .config import Settings, get_settings
+from .notify import dispatch_loop, dispatch_pending
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("campusfix")
 
 settings = get_settings()
 
-app = FastAPI(title="CampusFix API", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    # Email is a second channel on top of in-app notifications, so a missing
+    # SMTP config only means no email, never a failed startup.
+    task = asyncio.create_task(dispatch_loop(settings)) if settings.email_enabled else None
+    if task is None:
+        log.info("Email notifications disabled (SMTP_HOST or service role key not set).")
+    yield
+    if task:
+        task.cancel()
+
+
+app = FastAPI(title="CampusFix API", version="0.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
@@ -41,6 +57,7 @@ class Health(BaseModel):
     status: str
     ai_enabled: bool
     admin_enabled: bool
+    email_enabled: bool
 
 
 class ClassifyResult(BaseModel):
@@ -59,7 +76,31 @@ def health() -> Health:
         status="ok",
         ai_enabled=settings.ai_enabled,
         admin_enabled=settings.admin_enabled,
+        email_enabled=settings.email_enabled,
     )
+
+
+class DispatchResult(BaseModel):
+    sent: int
+    failed: int
+    skipped: int
+
+
+@app.post("/api/notifications/dispatch", response_model=DispatchResult)
+def dispatch_notifications(
+    caller: Caller = Depends(current_caller),
+    admin: Client = Depends(admin_client),
+    cfg: Settings = Depends(get_settings),
+) -> DispatchResult:
+    """Send pending notification emails now instead of waiting for the loop.
+
+    System admins only: it acts on every user's notifications.
+    """
+    if not caller.is_system_admin:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "System admins only")
+    if not cfg.smtp_host:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "SMTP_HOST is not configured.")
+    return DispatchResult(**dispatch_pending(admin, cfg))
 
 
 def _status_id(admin: Client, name: str) -> int | None:

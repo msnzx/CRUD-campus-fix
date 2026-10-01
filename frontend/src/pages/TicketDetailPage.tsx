@@ -2,22 +2,35 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { supabase, ATTACHMENT_BUCKET } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
-import { nameById, statusIdByName, statusNameById, useLookups } from '../lib/useLookups'
+import {
+  activeDepartments,
+  nameById,
+  statusIdByName,
+  statusNameById,
+  useLookups,
+} from '../lib/useLookups'
 import { Empty, ErrorNote, Loading, Modal, PriorityBadge, Spinner, StatusBadge } from '../components/ui'
 import { daysSince, formatDateTime, formatRelative, humanize } from '../lib/format'
 import {
+  ACCEPTED_IMAGE_TYPES,
   ALLOWED_TRANSITIONS,
   REOPEN_WINDOW_DAYS,
   STATUS,
   WITHDRAWABLE,
 } from '../lib/domain'
 import type { Tables } from '../lib/database.types'
+import { uploadAttachment, validateImage } from '../lib/attachments'
 
 interface CommentRow extends Tables<'comments'> {
   users: { first_name: string; last_name: string } | null
 }
 interface HistoryRow extends Tables<'ticket_history'> {
   users: { first_name: string; last_name: string } | null
+}
+interface Person {
+  user_id: string
+  first_name: string
+  last_name: string
 }
 
 export default function TicketDetailPage() {
@@ -26,9 +39,11 @@ export default function TicketDetailPage() {
   const nav = useNavigate()
   const routerLocation = useLocation()
   // Set by the submit page when the location row could not be written.
-  const locationFailed = Boolean(
-    (routerLocation.state as { locationFailed?: boolean } | null)?.locationFailed,
-  )
+  const navState = routerLocation.state as
+    | { locationFailed?: boolean; attachmentFailed?: boolean }
+    | null
+  const locationFailed = Boolean(navState?.locationFailed)
+  const attachmentFailed = Boolean(navState?.attachmentFailed)
   const { profile, isStaff, isAdmin } = useAuth()
   const { lookups, ready } = useLookups()
 
@@ -38,6 +53,8 @@ export default function TicketDetailPage() {
   const [attachments, setAttachments] = useState<Tables<'attachments'>[]>([])
   const [signedUrls, setSignedUrls] = useState<Record<number, string>>({})
   const [reopenReq, setReopenReq] = useState<Tables<'ticket_reopen_requests'> | null>(null)
+  const [assignee, setAssignee] = useState<Person | null>(null)
+  const [deptStaff, setDeptStaff] = useState<Person[]>([])
 
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
@@ -50,6 +67,10 @@ export default function TicketDetailPage() {
   const [showResolve, setShowResolve] = useState(false)
   const [showReopen, setShowReopen] = useState(false)
   const [reopenReason, setReopenReason] = useState('')
+  const [decisionNote, setDecisionNote] = useState('')
+  const [showTransfer, setShowTransfer] = useState(false)
+  const [transferTo, setTransferTo] = useState('')
+  const [transferReason, setTransferReason] = useState('')
 
   const load = useCallback(async () => {
     const { data: t, error: tErr } = await supabase
@@ -72,7 +93,7 @@ export default function TicketDetailPage() {
     }
     setTicket(t)
 
-    const [c, h, a, r] = await Promise.all([
+    const [c, h, a, r, asg, staff] = await Promise.all([
       supabase
         .from('comments')
         .select('*, users(first_name, last_name)')
@@ -91,12 +112,33 @@ export default function TicketDetailPage() {
         .order('requested_at', { ascending: false })
         .limit(1)
         .maybeSingle(),
+      supabase
+        .from('ticket_assignments')
+        .select('users!ticket_assignments_assigned_to_fkey(user_id, first_name, last_name)')
+        .eq('ticket_id', ticketId)
+        .is('unassigned_at', null)
+        .maybeSingle(),
+      // Staff can read department membership; for a requester RLS returns
+      // nothing, which is what they should see.
+      t.department_id
+        ? supabase
+            .from('user_departments')
+            .select('users(user_id, first_name, last_name, active)')
+            .eq('department_id', t.department_id)
+        : Promise.resolve({ data: [] }),
     ])
 
     setComments((c.data ?? []) as CommentRow[])
     setHistory((h.data ?? []) as HistoryRow[])
     setAttachments(a.data ?? [])
     setReopenReq(r.data ?? null)
+    setAssignee((asg.data?.users as unknown as Person | null) ?? null)
+    setDeptStaff(
+      ((staff.data ?? []) as unknown as { users: (Person & { active: boolean }) | null }[])
+        .map((row) => row.users)
+        .filter((u): u is Person & { active: boolean } => !!u && u.active)
+        .sort((x, y) => x.first_name.localeCompare(y.first_name)),
+    )
 
     // Attachments live in a private bucket. Mint a short-lived signed URL
     // per object; there is no public path to these files.
@@ -136,7 +178,16 @@ export default function TicketDetailPage() {
     resolvedDays <= REOPEN_WINDOW_DAYS &&
     reopenReq?.decision !== 'PENDING'
 
-  const transitions = statusName ? (ALLOWED_TRANSITIONS[statusName] ?? []) : []
+  // Assignment and resolution have their own controls (they need a person or
+  // resolution notes), so they are not offered as bare status buttons.
+  const allowed = statusName ? (ALLOWED_TRANSITIONS[statusName] ?? []) : []
+  const transitions = allowed.filter((s) => s !== STATUS.ASSIGNED && s !== STATUS.RESOLVED)
+  const canResolve = allowed.includes(STATUS.RESOLVED)
+  const isOpen = !!statusName && statusName !== STATUS.RESOLVED && statusName !== STATUS.CLOSED
+  const canAssign = isStaff && isOpen && ticket?.department_id != null
+  // Department admins transfer; any staff member may route an unrouted ticket.
+  const canTransfer = isStaff && isOpen && (isAdmin || ticket?.department_id == null)
+  const lastDenial = history.find((h) => h.action === 'REOPEN_DENIED')
 
   // Supabase query builders are thenable but are not real Promises, so the
   // callback is typed as PromiseLike rather than Promise.
@@ -187,7 +238,6 @@ export default function TicketDetailPage() {
         .update({
           status_id: statusId,
           resolution_notes: resolution.trim() || null,
-          resolved_at: new Date().toISOString(),
         })
         .eq('ticket_id', ticketId)
       setShowResolve(false)
@@ -196,19 +246,50 @@ export default function TicketDetailPage() {
     })
   }
 
-  async function claim() {
-    if (!profile) return
+  async function assignTo(userId: string) {
+    await run(() => supabase.rpc('assign_ticket', { p_ticket_id: ticketId, p_assignee: userId }))
+  }
+
+  async function unassign() {
+    await run(() => supabase.rpc('unassign_ticket', { p_ticket_id: ticketId }))
+  }
+
+  async function setPriority(priorityId: string) {
+    await run(() =>
+      supabase
+        .from('tickets')
+        .update({ priority_id: priorityId ? Number(priorityId) : null })
+        .eq('ticket_id', ticketId),
+    )
+  }
+
+  async function transfer(departmentId: number, reason?: string) {
     await run(async () => {
-      const assign = await supabase.from('ticket_assignments').insert({
-        ticket_id: ticketId,
-        assigned_to: profile.user_id,
-        assigned_by: profile.user_id,
+      const res = await supabase.rpc('transfer_ticket', {
+        p_ticket_id: ticketId,
+        p_department_id: departmentId,
+        p_reason: reason?.trim() || undefined,
       })
-      if (assign.error) return assign
-      const statusId = statusIdByName(lookups, STATUS.ASSIGNED)
-      return statusId
-        ? supabase.from('tickets').update({ status_id: statusId }).eq('ticket_id', ticketId)
-        : undefined
+      if (!res.error) {
+        setShowTransfer(false)
+        setTransferReason('')
+      }
+      return res
+    })
+  }
+
+  async function addPhoto(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0]
+    e.target.value = ''
+    if (!f || !profile) return
+    const problem = validateImage(f)
+    if (problem) {
+      setError(new Error(problem))
+      return
+    }
+    await run(async () => {
+      const err = await uploadAttachment(ticketId, f, profile.user_id)
+      if (err) throw err
     })
   }
 
@@ -234,27 +315,15 @@ export default function TicketDetailPage() {
     })
   }
 
-  async function decideReopen(decision: 'APPROVED' | 'DENIED') {
-    if (!reopenReq || !profile) return
+  async function decideReopen(approve: boolean) {
+    if (!reopenReq) return
     await run(async () => {
-      const res = await supabase
-        .from('ticket_reopen_requests')
-        .update({
-          decision,
-          decided_by: profile.user_id,
-          decided_at: new Date().toISOString(),
-        })
-        .eq('request_id', reopenReq.request_id)
-      if (res.error) return res
-      if (decision === 'APPROVED') {
-        const statusId = statusIdByName(lookups, STATUS.REOPENED)
-        if (statusId) {
-          return supabase
-            .from('tickets')
-            .update({ status_id: statusId, resolved_at: null })
-            .eq('ticket_id', ticketId)
-        }
-      }
+      const res = await supabase.rpc('decide_reopen', {
+        p_request_id: reopenReq.request_id,
+        p_approve: approve,
+        p_note: decisionNote.trim() || undefined,
+      })
+      if (!res.error) setDecisionNote('')
       return res
     })
   }
@@ -299,6 +368,11 @@ export default function TicketDetailPage() {
             'Uncategorised'}
         </span>
         <span className="small muted">Opened {formatRelative(ticket.created_at)}</span>
+        {isStaff && (
+          <span className="small muted">
+            · {assignee ? `Assigned to ${assignee.first_name} ${assignee.last_name}` : 'Unassigned'}
+          </span>
+        )}
       </div>
 
       <ErrorNote error={error} />
@@ -307,6 +381,13 @@ export default function TicketDetailPage() {
         <div className="alert warn">
           The ticket was created, but its location could not be saved. Ask staff to set
           the building on the ticket so it appears on the campus map.
+        </div>
+      )}
+
+      {attachmentFailed && (
+        <div className="alert warn">
+          The ticket was created, but the photo could not be uploaded. You can describe it in a
+          comment, or file the photo again later.
         </div>
       )}
 
@@ -322,17 +403,60 @@ export default function TicketDetailPage() {
           <strong>Reopen requested</strong> {formatRelative(reopenReq.requested_at)}
           {reopenReq.reason && <> — “{reopenReq.reason}”</>}
           {isAdmin && (
-            <div className="actions" style={{ marginTop: '0.6rem' }}>
-              <button className="sm primary" disabled={busy} onClick={() => void decideReopen('APPROVED')}>
-                Approve
-              </button>
-              <button className="sm" disabled={busy} onClick={() => void decideReopen('DENIED')}>
-                Deny
-              </button>
-            </div>
+            <>
+              <input
+                aria-label="Note to the requester (optional)"
+                placeholder="Note to the requester (optional)"
+                value={decisionNote}
+                onChange={(e) => setDecisionNote(e.target.value)}
+                style={{ marginTop: '0.6rem' }}
+              />
+              <div className="actions" style={{ marginTop: '0.5rem' }}>
+                <button className="sm primary" disabled={busy} onClick={() => void decideReopen(true)}>
+                  Approve
+                </button>
+                <button className="sm" disabled={busy} onClick={() => void decideReopen(false)}>
+                  Decline
+                </button>
+              </div>
+            </>
           )}
         </div>
       )}
+
+      {reopenReq?.decision === 'DENIED' && statusName === STATUS.RESOLVED && (
+        <div className="alert warn">
+          <strong>Reopen request declined</strong>{' '}
+          {formatRelative(reopenReq.decided_at ?? reopenReq.requested_at)}
+          {lastDenial?.new_value && <> — “{lastDenial.new_value}”</>}
+        </div>
+      )}
+
+      {isStaff &&
+        statusName === STATUS.NEEDS_REVIEW &&
+        ticket.ai_suggested_department_id != null &&
+        ticket.ai_suggested_department_id !== ticket.department_id && (
+          <div className="alert warn">
+            AI suggests{' '}
+            <strong>
+              {nameById(lookups.departments, 'department_id', ticket.ai_suggested_department_id)}
+            </strong>
+            {ticket.ai_confidence != null && (
+              <> ({Math.round(ticket.ai_confidence * 100)}% confident)</>
+            )}
+            .
+            {canTransfer && (
+              <button
+                className="sm"
+                style={{ marginLeft: '0.6rem' }}
+                disabled={busy}
+                onClick={() => void transfer(ticket.ai_suggested_department_id!)}
+              >
+                Accept suggestion
+              </button>
+            )}
+          </div>
+        )}
 
       <div className="card">
         <h3>Description</h3>
@@ -352,21 +476,36 @@ export default function TicketDetailPage() {
         )}
       </div>
 
-      {attachments.length > 0 && (
+      {(attachments.length > 0 || isOpen) && (
         <div className="card">
           <h3>Photos</h3>
-          <div className="attachments">
-            {attachments.map((a) => (
-              <a key={a.attachment_id} href={signedUrls[a.attachment_id]} target="_blank" rel="noreferrer">
-                {signedUrls[a.attachment_id] ? (
-                  <img src={signedUrls[a.attachment_id]} alt={a.file_name} />
-                ) : (
-                  <span className="small muted">{a.file_name}</span>
-                )}
-              </a>
-            ))}
-          </div>
-          <div className="hint">Links expire after five minutes.</div>
+          {attachments.length > 0 ? (
+            <div className="attachments">
+              {attachments.map((a) => (
+                <a key={a.attachment_id} href={signedUrls[a.attachment_id]} target="_blank" rel="noreferrer">
+                  {signedUrls[a.attachment_id] ? (
+                    <img src={signedUrls[a.attachment_id]} alt={a.file_name} />
+                  ) : (
+                    <span className="small muted">{a.file_name}</span>
+                  )}
+                </a>
+              ))}
+            </div>
+          ) : (
+            <p className="small muted">No photos yet.</p>
+          )}
+          {isOpen && (
+            <label className="file-button">
+              <input
+                type="file"
+                accept={ACCEPTED_IMAGE_TYPES.join(',')}
+                onChange={(e) => void addPhoto(e)}
+                disabled={busy}
+              />
+              + Add photo
+            </label>
+          )}
+          {attachments.length > 0 && <div className="hint">Links expire after five minutes.</div>}
         </div>
       )}
 
@@ -379,12 +518,26 @@ export default function TicketDetailPage() {
               Move to {humanize(s)}
             </button>
           ))}
-          {isStaff && statusName !== STATUS.RESOLVED && (
+          {isStaff && canResolve && (
             <button className="sm primary" disabled={busy} onClick={() => setShowResolve(true)}>
               Resolve
             </button>
           )}
-          {isStaff && <button className="sm" disabled={busy} onClick={() => void claim()}>Claim</button>}
+          {canAssign && profile && assignee?.user_id !== profile.user_id && (
+            <button className="sm" disabled={busy} onClick={() => void assignTo(profile.user_id)}>
+              {assignee ? 'Take over' : 'Claim'}
+            </button>
+          )}
+          {canAssign && assignee && (
+            <button className="sm" disabled={busy} onClick={() => void unassign()}>
+              Unassign
+            </button>
+          )}
+          {canTransfer && (
+            <button className="sm" disabled={busy} onClick={() => setShowTransfer(true)}>
+              {ticket.department_id == null ? 'Route to department' : 'Transfer'}
+            </button>
+          )}
           {canReopen && (
             <button className="sm primary" disabled={busy} onClick={() => setShowReopen(true)}>
               Request reopen
@@ -397,6 +550,52 @@ export default function TicketDetailPage() {
           )}
           {busy && <Spinner />}
         </div>
+
+        {isStaff && (canAssign || isOpen) && (
+          <div className="row" style={{ marginTop: '0.9rem' }}>
+            {canAssign && (
+              <div>
+                <label htmlFor="assign">Assign to</label>
+                <select
+                  id="assign"
+                  value={assignee?.user_id ?? ''}
+                  disabled={busy}
+                  onChange={(e) => e.target.value && void assignTo(e.target.value)}
+                >
+                  <option value="">— Unassigned —</option>
+                  {assignee && !deptStaff.some((p) => p.user_id === assignee.user_id) && (
+                    <option value={assignee.user_id}>
+                      {assignee.first_name} {assignee.last_name}
+                    </option>
+                  )}
+                  {deptStaff.map((p) => (
+                    <option key={p.user_id} value={p.user_id}>
+                      {p.first_name} {p.last_name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            {isOpen && (
+              <div>
+                <label htmlFor="priority">Priority</label>
+                <select
+                  id="priority"
+                  value={ticket.priority_id ?? ''}
+                  disabled={busy}
+                  onChange={(e) => void setPriority(e.target.value)}
+                >
+                  <option value="">Not set</option>
+                  {lookups.priorities.map((p) => (
+                    <option key={p.priority_id} value={p.priority_id}>
+                      {humanize(p.name)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+        )}
         {isOwner && statusName === STATUS.RESOLVED && !canReopen && reopenReq?.decision !== 'PENDING' && (
           <div className="hint">
             The {REOPEN_WINDOW_DAYS}-day reopen window has closed. Add a comment instead, or
@@ -455,7 +654,7 @@ export default function TicketDetailPage() {
       <div className="card">
         <h3>History</h3>
         <ul className="timeline">
-          {history.map((h) => (
+          {history.filter((h) => h.action !== 'DEMO_SEED').map((h) => (
             <li key={h.history_id}>
               <strong>{humanize(h.action)}</strong>
               {h.old_value && h.new_value && <> · {humanize(h.old_value)} → {humanize(h.new_value)}</>}
@@ -486,6 +685,49 @@ export default function TicketDetailPage() {
               Resolve
             </button>
             <button onClick={() => setShowResolve(false)}>Cancel</button>
+          </div>
+        </Modal>
+      )}
+
+      {showTransfer && (
+        <Modal
+          title={ticket.department_id == null ? 'Route to department' : 'Transfer ticket'}
+          onClose={() => setShowTransfer(false)}
+        >
+          <div className="field">
+            <label htmlFor="to-dept">Department</label>
+            <select id="to-dept" value={transferTo} onChange={(e) => setTransferTo(e.target.value)}>
+              <option value="">Choose…</option>
+              {activeDepartments(lookups)
+                .filter((d) => d.department_id !== ticket.department_id)
+                .map((d) => (
+                  <option key={d.department_id} value={d.department_id}>
+                    {d.name}
+                  </option>
+                ))}
+            </select>
+          </div>
+          <div className="field">
+            <label htmlFor="to-why">Reason (internal note)</label>
+            <textarea
+              id="to-why"
+              value={transferReason}
+              onChange={(e) => setTransferReason(e.target.value)}
+              placeholder="The fault is in the network switch, not the wall socket."
+            />
+            <div className="hint">
+              Any current assignee is removed; the receiving department assigns it.
+            </div>
+          </div>
+          <div className="actions">
+            <button
+              className="primary"
+              disabled={busy || !transferTo}
+              onClick={() => void transfer(Number(transferTo), transferReason)}
+            >
+              {ticket.department_id == null ? 'Route' : 'Transfer'}
+            </button>
+            <button onClick={() => setShowTransfer(false)}>Cancel</button>
           </div>
         </Modal>
       )}

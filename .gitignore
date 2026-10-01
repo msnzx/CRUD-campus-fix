@@ -34,3 +34,6 @@ Thumbs.db
 
 # Build artifacts
 *.tsbuildinfo
+
+# Private planning notes
+NEXT_STEPS.private.md

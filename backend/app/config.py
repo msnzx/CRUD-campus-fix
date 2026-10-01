@@ -23,6 +23,20 @@ class Settings(BaseSettings):
     ai_confidence_threshold: float = 0.75
     cors_origins: str = "http://localhost:5173"
 
+    # Email delivery of notifications. Leave SMTP_HOST blank to disable; the
+    # in-app notifications work regardless.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = "CampusFix <no-reply@caldwell.edu>"
+    notify_interval_seconds: int = 60
+    app_url: str = "http://localhost:5173"
+
+    @property
+    def email_enabled(self) -> bool:
+        return bool(self.smtp_host) and self.admin_enabled
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

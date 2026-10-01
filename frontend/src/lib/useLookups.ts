@@ -39,10 +39,20 @@ async function fetchLookups(): Promise<Lookups> {
       supabase.from('area_types').select('*').order('name'),
     ])
 
+  // Before sign-in these reads are refused (anon has no grants). Treat that
+  // as a failure rather than "no rows": caching the empty result would leave
+  // every screen without statuses or departments until a full reload.
+  const failed = [statuses, priorities, departments, issueTypes, buildings, floors, areaTypes].find(
+    (r) => r.error,
+  )
+  if (failed?.error) throw failed.error
+
   return {
     statuses: statuses.data ?? [],
     priorities: priorities.data ?? [],
-    departments: (departments.data ?? []).filter((d) => d.active),
+    // Inactive departments stay in the list so tickets they own still show a
+    // name. Pickers that choose a department use activeDepartments() instead.
+    departments: departments.data ?? [],
     issueTypes: issueTypes.data ?? [],
     buildings: buildings.data ?? [],
     floors: floors.data ?? [],
@@ -114,4 +124,8 @@ export function nameById<T extends Record<string, unknown>>(
   if (id == null) return null
   const row = rows.find((r) => r[idKey] === id)
   return row ? (row[nameKey] as string) : null
+}
+
+export function activeDepartments(lookups: Lookups): Tables<'departments'>[] {
+  return lookups.departments.filter((d) => d.active)
 }

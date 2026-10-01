@@ -89,11 +89,26 @@ As **fac.staff**:
    sort order is selected.
 2. Filter by status, priority, building — the count updates.
 3. Open the ticket, **Claim** it. Status becomes Assigned and History records it.
-4. **Move to In Progress**.
+   The requester gets a notification (bell in the header).
+4. **Move to In Progress**. Set a **Priority** from the dropdown.
 5. Add a public comment, then tick **Internal note** and add a second.
 6. **Resolve** with resolution notes.
 
 **Expect:** every step appends to History with an actor and a timestamp.
+
+**4c. Status rules are enforced by the database.** Only legal next steps are
+offered as buttons, and a crafted request for an illegal one (NEW straight to
+RESOLVED, say) fails with "A ticket cannot move from NEW to RESOLVED".
+
+**4d. Reassignment and transfer (V-§8).** As **fac.admin**, reassign a ticket
+with the **Assign to** dropdown, then **Unassign** it: History shows both. Use
+**Transfer** to move it to IT. It disappears from Facilities and appears,
+unassigned, in **it.staff**'s queue. **fac.staff** has no Transfer button, and
+the `transfer_ticket` RPC refuses them if called directly.
+
+**4e. Staff management.** As **fac.admin**, open **Staff** and add
+**it.staff** to Facilities, then remove them. As the system admin the page is
+**Users** and also changes roles and deactivates accounts.
 
 **4b. Internal notes really are hidden (V-002).** Sign back in as **student2**
 and open the same ticket. The public comment is there; the internal note is
@@ -109,8 +124,11 @@ As **student2**, on the resolved ticket:
 1. **Request reopen**, with a reason.
 2. Try again — blocked. One pending request per ticket, enforced by a partial
    unique index.
-3. Sign in as **fac.admin**: the pending request appears with Approve / Deny.
+3. Sign in as **fac.admin**: the bell shows the request, the queue shows a
+   "reopen requests waiting" banner, and the ticket offers Approve / Decline
+   with an optional note.
 4. Approve. The ticket returns to **Reopened** and re-enters the queue.
+   Declining instead leaves it resolved and tells the requester why.
 
 **fac.staff** does not see Approve/Deny. That is a DEPARTMENT_ADMIN action by
 design — `verification.md` §8.
@@ -127,6 +145,10 @@ update public.tickets set resolved_at = now() - interval '8 days'
 
 Reload: the Reopen button is gone and the hint explains why. The RLS policy
 also rejects a direct insert, so a crafted request cannot get around it.
+
+**5d. Auto-close.** A nightly pg_cron job closes resolved tickets once the
+window passes. To see it immediately, after the SQL above run
+`select private.close_expired_resolved_tickets();` and reload: **Closed**.
 
 ---
 
@@ -151,9 +173,18 @@ tickets, so the chart code never needs to know about permissions.
 
 Students have no Analytics tab, and `/analytics` redirects them away.
 
+For a realistic demo, load `supabase/seed/demo_tickets.sql` in the SQL editor
+first (about 300 tickets over four months), and remove it afterwards with
+`supabase/seed/demo_tickets_cleanup.sql`.
+
 ---
 
 ## 8. Privilege escalation — all of these must fail
+
+**Automated:** paste `supabase/tests/workflow_and_security.sql` into the SQL
+editor and run it. It impersonates the test accounts, runs 28 checks covering
+this section and the workflow rules, and rolls everything back. Every row must
+say PASS. The manual version:
 
 ```sql
 begin;
@@ -171,9 +202,12 @@ rollback;
 
 Signed out, as `anon`, every table returns permission denied.
 
-Also run the Supabase security advisors after any migration. The only expected
-finding is `withdraw_own_ticket` being callable by authenticated users — that
-is its purpose, and it checks ownership and status internally.
+Also run the Supabase security advisors after any migration. Expected
+findings: the workflow RPCs (`withdraw_own_ticket`, `assign_ticket`,
+`unassign_ticket`, `transfer_ticket`, `decide_reopen`, `admin_set_user_role`,
+`admin_set_user_active`, `set_department_member`) are callable by
+authenticated users. That is their purpose; each checks the caller's role and
+access internally. Anything else is a real finding.
 
 ---
 

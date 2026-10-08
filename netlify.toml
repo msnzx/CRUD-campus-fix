@@ -1,0 +1,14 @@
+[build]
+  base = "frontend"
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# Single-page app: serve index.html for every route so React Router handles it
+# (deep links, refreshes, and Supabase auth/password-reset redirects).
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

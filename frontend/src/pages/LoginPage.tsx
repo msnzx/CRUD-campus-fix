@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useAuth } from '../auth/AuthProvider'
-import { BrandMark, ErrorNote, Spinner } from '../components/ui'
+import { BrandMark, ErrorNote, PasswordInput, Spinner } from '../components/ui'
 
 type Mode = 'signin' | 'signup' | 'forgot'
 
@@ -156,9 +156,8 @@ export default function LoginPage() {
                   </button>
                 )}
               </div>
-              <input
+              <PasswordInput
                 id="password"
-                type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required

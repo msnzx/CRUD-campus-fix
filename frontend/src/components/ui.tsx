@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react'
-import type { ReactNode } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import type { InputHTMLAttributes, ReactNode } from 'react'
 import { STATUS } from '../lib/domain'
 import { humanize } from '../lib/format'
 
@@ -19,6 +19,25 @@ export function BrandMark({ size = 32 }: { size?: number }) {
 
 export function Spinner() {
   return <span className="spinner" role="status" aria-label="Loading" />
+}
+
+// Password field with a Show/Hide toggle so people can check what they typed.
+export function PasswordInput(props: Omit<InputHTMLAttributes<HTMLInputElement>, 'type'>) {
+  const [visible, setVisible] = useState(false)
+  return (
+    <div className="password-wrap">
+      <input {...props} type={visible ? 'text' : 'password'} />
+      <button
+        type="button"
+        className="link password-toggle"
+        onClick={() => setVisible((v) => !v)}
+        aria-pressed={visible}
+        aria-label={visible ? 'Hide password' : 'Show password'}
+      >
+        {visible ? 'Hide' : 'Show'}
+      </button>
+    </div>
+  )
 }
 
 export function Loading({ label = 'Loading…' }: { label?: string }) {

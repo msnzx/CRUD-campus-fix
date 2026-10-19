@@ -496,6 +496,10 @@ button.link {
 }
 button.link:hover:not(:disabled) { background: none; text-decoration: underline; }
 
+.password-wrap { position: relative; }
+.password-wrap input { padding-right: 4rem; }
+.password-toggle { position: absolute; right: 0.75rem; top: 50%; transform: translateY(-50%); }
+
 .auth-foot {text-align: center; font-size: 0.82rem; color: var(--text-dim); margin: 1.2rem 0 0; }
 
 /* ---------- campus map ---------- */

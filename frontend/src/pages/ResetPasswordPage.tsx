@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthProvider'
-import { BrandMark, ErrorNote, Spinner } from '../components/ui'
+import { BrandMark, ErrorNote, PasswordInput, Spinner } from '../components/ui'
 
 // Landing page for the emailed reset link. supabase-js reads the recovery
 // token from the URL hash and signs the user in, so by the time this renders
@@ -65,9 +65,8 @@ export default function ResetPasswordPage() {
             <form onSubmit={onSubmit}>
               <div className="field">
                 <label htmlFor="new-password">New password</label>
-                <input
+                <PasswordInput
                   id="new-password"
-                  type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
@@ -78,9 +77,8 @@ export default function ResetPasswordPage() {
               </div>
               <div className="field">
                 <label htmlFor="confirm-password">Confirm new password</label>
-                <input
+                <PasswordInput
                   id="confirm-password"
-                  type="password"
                   value={confirm}
                   onChange={(e) => setConfirm(e.target.value)}
                   required

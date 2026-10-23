@@ -25,6 +25,7 @@ from .classify import classify
 from .config import Settings, get_settings
 from .enrich import enrich_ticket
 from .notify import dispatch_loop, dispatch_pending
+from .sweep import sweep_loop
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("campusfix")
@@ -39,9 +40,11 @@ async def lifespan(_: FastAPI):
     task = asyncio.create_task(dispatch_loop(settings)) if settings.email_enabled else None
     if task is None:
         log.info("Email notifications disabled (SMTP_HOST or service role key not set).")
+    sweeper = asyncio.create_task(sweep_loop(settings, route_ticket)) if settings.ai_enabled else None
     yield
-    if task:
-        task.cancel()
+    for t in (task, sweeper):
+        if t:
+            t.cancel()
 
 
 app = FastAPI(title="CampusFix API", version="0.1.0", lifespan=lifespan)
@@ -122,6 +125,16 @@ def classify_ticket(
     leaves the ticket in a state a human can act on.
     """
     ticket = assert_can_access_ticket(admin, caller, ticket_id)
+    return route_ticket(ticket, admin, cfg)
+
+
+def route_ticket(ticket: dict, admin: Client, cfg: Settings) -> ClassifyResult:
+    """Classify an already-authorized ticket row and apply the routing outcome.
+
+    Shared by the HTTP endpoint and the background sweeper. Callers are
+    responsible for the access check.
+    """
+    ticket_id = ticket["ticket_id"]
 
     # Only the requester or staff may trigger this, and only once.
     if ticket["ai_routing_status"] not in ("PENDING", "FAILED"):

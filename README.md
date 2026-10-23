@@ -172,3 +172,19 @@ rollback;
 
 Run `get_advisors(security)` from the Supabase MCP server, or the dashboard's
 advisors page, after any migration. It should report zero findings.
+
+## Running the AI classifier from a developer machine
+
+The classifier uses a local Ollama model, so the backend runs on whichever
+machine has Ollama. To let the deployed Netlify site use it:
+
+1. `ollama pull deepseek-r1:8b`, then start the backend (`uvicorn app.main:app --port 8000` from `backend/`).
+2. Expose it over HTTPS with a tunnel, e.g. `cloudflared tunnel --url http://localhost:8000`
+   (quick, URL changes per run) or a named Cloudflare Tunnel (stable URL).
+3. In `backend/.env` set `CORS_ORIGINS` and `APP_URL` to the Netlify site URL
+   (comma-separate to keep `http://localhost:5173`).
+4. In Netlify set `VITE_API_URL` to the tunnel URL and redeploy.
+
+While that machine is off, tickets still submit and stay `PENDING`. When the
+backend comes back, its sweeper (`app/sweep.py`) classifies them within a few
+minutes. Check `GET <tunnel-url>/api/health` for `ai_enabled: true`.

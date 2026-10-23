@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     ollama_model: str = "deepseek-r1:8b"
     ollama_timeout_seconds: float = Field(default=180, gt=0)
 
+    # How often to classify tickets submitted while this backend was unreachable.
+    sweep_interval_seconds: int = Field(default=60, gt=0)
+
     ai_confidence_threshold: float = Field(default=0.75, ge=0, le=1)
     cors_origins: str = "http://localhost:5173"
 

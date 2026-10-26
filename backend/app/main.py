@@ -13,12 +13,13 @@ endpoint re-checks access explicitly. See app/auth.py.
 
 import asyncio
 import logging
+import threading
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, FastAPI, HTTPException, status
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from supabase import Client
+from supabase import Client, create_client
 
 from .auth import Caller, admin_client, assert_can_access_ticket, current_caller
 from .classify import classify
@@ -31,28 +32,30 @@ log = logging.getLogger("campusfix")
 
 settings = get_settings()
 
+PENDING_CLASSIFICATION_DELAY = timedelta(seconds=5)
+CLASSIFICATION_CHECK_INTERVAL_SECONDS = 7
+CLASSIFICATION_BATCH_SIZE = 3
+_active_classifications: set[int] = set()
+_active_classifications_lock = threading.Lock()
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    # Email is a second channel on top of in-app notifications, so a missing
-    # SMTP config only means no email, never a failed startup.
-    task = asyncio.create_task(dispatch_loop(settings)) if settings.email_enabled else None
-    if task is None:
+    tasks = []
+    if settings.ai_enabled:
+        tasks.append(asyncio.create_task(classification_loop(settings)))
+    if settings.email_enabled:
+        tasks.append(asyncio.create_task(dispatch_loop(settings)))
+    if not settings.email_enabled:
         log.info("Email notifications disabled (SMTP_HOST or service role key not set).")
     yield
-    if task:
+    for task in tasks:
         task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 app = FastAPI(title="CampusFix API", version="0.1.0", lifespan=lifespan)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origin_list,
-    allow_origin_regex=settings.cors_origin_regex,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 
 class Health(BaseModel):
@@ -110,33 +113,11 @@ def _status_id(admin: Client, name: str) -> int | None:
     return row.data["status_id"] if row and row.data else None
 
 
-@app.post("/api/tickets/{ticket_id}/classify", response_model=ClassifyResult)
-def classify_ticket(
-    ticket_id: int,
-    caller: Caller = Depends(current_caller),
-    admin: Client = Depends(admin_client),
-    cfg: Settings = Depends(get_settings),
-) -> ClassifyResult:
-    """Classify a ticket and route it.
-
-    Called fire-and-forget by the client right after submission. Every branch
-    leaves the ticket in a state a human can act on.
-    """
-    ticket = assert_can_access_ticket(admin, caller, ticket_id)
-
-    # Only the requester or staff may trigger this, and only once.
-    if ticket["ai_routing_status"] not in ("PENDING", "FAILED"):
-        return ClassifyResult(
-            ticket_id=ticket_id,
-            routing_status=ticket["ai_routing_status"],
-            detail="Already classified.",
-        )
-
+def _process_classification(ticket: dict, admin: Client, cfg: Settings) -> ClassifyResult:
+    ticket_id = ticket["ticket_id"]
     result = classify(ticket, admin, cfg)
 
     if result is None:
-        # Classifier unavailable. The ticket keeps whatever department its
-        # issue type gave it and a human picks up the rest.
         failure_update: dict = {"ai_routing_status": "FAILED"}
         if not ticket.get("is_emergency"):
             failure_update["status_id"] = _status_id(admin, "NEEDS_REVIEW")
@@ -204,6 +185,93 @@ def classify_ticket(
         confidence=round(result.confidence, 4),
         detail="Routed automatically." if confident else "Classification requires manual review.",
     )
+
+
+def _classify_pending_ticket(ticket_id: int, admin: Client, cfg: Settings) -> ClassifyResult:
+    with _active_classifications_lock:
+        if ticket_id in _active_classifications:
+            return ClassifyResult(
+                ticket_id=ticket_id,
+                routing_status="PENDING",
+                detail="Classification is already in progress.",
+            )
+        _active_classifications.add(ticket_id)
+
+    try:
+        response = (
+            admin.table("tickets")
+            .select("*")
+            .eq("ticket_id", ticket_id)
+            .maybe_single()
+            .execute()
+        )
+        ticket = response.data if response else None
+        if not ticket:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Ticket not found")
+        if ticket["ai_routing_status"] not in ("PENDING", "FAILED"):
+            return ClassifyResult(
+                ticket_id=ticket_id,
+                routing_status=ticket["ai_routing_status"],
+                detail="Already classified.",
+            )
+        return _process_classification(ticket, admin, cfg)
+    finally:
+        with _active_classifications_lock:
+            _active_classifications.discard(ticket_id)
+
+
+async def classification_loop(cfg: Settings) -> None:
+    """Route saved pending tickets without requiring a browser request."""
+    admin = create_client(cfg.supabase_url, cfg.supabase_service_role_key)
+    while True:
+        await asyncio.sleep(CLASSIFICATION_CHECK_INTERVAL_SECONDS)
+        try:
+            cutoff = (datetime.now(timezone.utc) - PENDING_CLASSIFICATION_DELAY).isoformat()
+            rows = (
+                admin.table("tickets")
+                .select("ticket_id")
+                .eq("ai_routing_status", "PENDING")
+                .is_("deleted_at", "null")
+                .lt("created_at", cutoff)
+                .order("created_at", desc=True)
+                .limit(CLASSIFICATION_BATCH_SIZE)
+                .execute()
+            ).data or []
+            for row in rows:
+                result = await asyncio.to_thread(
+                    _classify_pending_ticket, row["ticket_id"], admin, cfg
+                )
+                log.info(
+                    "Pending ticket recovery completed ticket=%s routing_status=%s",
+                    result.ticket_id,
+                    result.routing_status,
+                )
+        except Exception:
+            log.exception("Pending ticket recovery failed")
+
+
+@app.post("/api/tickets/{ticket_id}/classify", response_model=ClassifyResult)
+def classify_ticket(
+    ticket_id: int,
+    caller: Caller = Depends(current_caller),
+    admin: Client = Depends(admin_client),
+    cfg: Settings = Depends(get_settings),
+) -> ClassifyResult:
+    """Classify a ticket and route it.
+
+    Called fire-and-forget by the client right after submission. Every branch
+    leaves the ticket in a state a human can act on.
+    """
+    ticket = assert_can_access_ticket(admin, caller, ticket_id)
+
+    # Only the requester or staff may trigger this, and only once.
+    if ticket["ai_routing_status"] not in ("PENDING", "FAILED"):
+        return ClassifyResult(
+            ticket_id=ticket_id,
+            routing_status=ticket["ai_routing_status"],
+            detail="Already classified.",
+        )
+    return _classify_pending_ticket(ticket_id, admin, cfg)
 
 
 @app.post("/api/tickets/{ticket_id}/reclassify", response_model=ClassifyResult)

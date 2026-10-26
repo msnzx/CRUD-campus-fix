@@ -14,10 +14,9 @@ recorded benchmark. The preceding deployment baseline is commit `4cac79a`.
   review decisions remain `NEEDS_REVIEW`. Failures become `FAILED` for review.
 - Emergency protections retain the existing effective department, priority, and
   status. Existing bearer authentication, permissions, and Supabase RLS apply.
-- The browser saves the ticket in Supabase first and immediately triggers an
-  authenticated, fire-and-forget classification POST, before optional photo
-  upload. AI has no submission deadline and no browser-side abort timer. AI or
-  tunnel failure cannot invalidate the saved submission.
+- The browser saves the ticket in Supabase first. A local FastAPI worker polls
+  for pending tickets and routes them asynchronously; model failures cannot
+  invalidate the saved submission.
 
 There is no retrieval, embedding model, vector store, RAG prompt context, tool
 agent, or new model in this baseline. Routing prompts and the selected model
@@ -32,7 +31,6 @@ OLLAMA_URL=http://localhost:11434/api/chat
 OLLAMA_MODEL=deepseek-r1:8b
 OLLAMA_TIMEOUT_SECONDS=180
 AI_CLASSIFICATION_ENABLED=true
-CORS_ORIGINS=https://campusfizz.netlify.app,http://localhost:5173
 APP_URL=https://campusfizz.netlify.app
 ```
 
@@ -42,10 +40,11 @@ non-streaming requests, `think=false`, and a 30-minute model keep-alive. The
 is cached per process; restart after taxonomy changes. The compatibility
 confidence value 1.0/0.0 is a route/review flag, not a calibrated probability.
 
-The Netlify frontend uses build-time `VITE_API_URL=<HTTPS FastAPI tunnel URL>`.
-Only FastAPI port 8000 is tunneled; Ollama 11434 stays on loopback. See
-[deployment instructions](NETLIFY_CLOUDFLARE.md). Secrets stay in private local
-configuration, never in Git or frontend environment variables.
+The Netlify frontend never connects to FastAPI. The local backend polls hosted
+Supabase for pending tickets and calls Ollama on loopback; no tunnel, CORS, or
+frontend API URL is used. See [the local AI worker guide](LOCAL_AI_WORKER.md).
+Secrets stay in private local configuration, never in Git or frontend
+environment variables.
 
 ## Original submission and enrichment
 

@@ -72,10 +72,11 @@ After successful routing is saved, a separate enrichment call preserves
 the verbatim `original_title` and `original_text` snapshots and generates a
 cleaned `title`, `description`, and `ai_explanation`. Enrichment writes only
 those text fields. Its failure cannot undo routing or turn a successful classification into an API error. Ticket
-creation never depends on either model call succeeding. The frontend starts
-classification immediately after saving the ticket, without awaiting it or
-imposing a browser-side timeout. Slow inference, a cold start, or a tunnel error
-cannot turn a saved ticket into a submission failure.
+creation never depends on either model call succeeding. The backend polls
+Supabase for non-deleted tickets still marked `PENDING` every seven seconds,
+starting five seconds after creation, and routes them asynchronously. The
+worker runs only while the AI-enabled backend is running; classification
+failures are recorded as `FAILED` for staff review.
 
 Classification and enrichment share `OLLAMA_URL`, `OLLAMA_MODEL` (default
 `deepseek-r1:8b`), and `OLLAMA_TIMEOUT_SECONDS` (default `180`) from `backend/.env`.
@@ -88,43 +89,25 @@ Supabase client against an in-memory HTTP transport, without remote writes.
 Run frontend request regression tests from `frontend` with `npm test`, followed
 by `npm run typecheck` and `npm run build`.
 
-### Local presentation
+### Local AI worker for the Netlify frontend
 
-Use [the local demo guide](docs/LOCAL_DEMO.md) for the exact three-terminal
-workflow, environment checks, sample ticket, and troubleshooting. Locally set
-`VITE_API_URL=http://localhost:8000`. Restricted loopback CORS supports both
-localhost and 127.0.0.1 on Vite development ports, including 5173 and 5174.
-Restart the backend to load the change; no port-by-port CORS edit is needed.
+The browser writes tickets directly to Supabase. The local FastAPI backend
+polls Supabase for pending tickets, classifies them with Ollama, and writes the
+result back. No public backend URL, tunnel, browser-to-backend request, CORS
+allowlist, or `VITE_API_URL` is needed. Supabase remains hosted as usual.
 
-The ticket page polls only its ticket row every three seconds while routing is
-pending, with a six-minute ceiling and cleanup on navigation. It stops on a
-completed routing status. A final refresh when the submitting tab's POST finishes
-picks up separate enrichment. The stored AI routing explanation is displayed;
-staff can expand original student text when it differs from the polished version.
-Drafts and action forms remain intact. Model/policy and frozen benchmarks are unchanged.
+The backend waits five seconds after ticket creation, then checks the queue
+every seven seconds. It only starts this worker when AI and the private
+service-role key are configured. The backend machine must stay on, connected,
+and running Ollama and FastAPI; configure FastAPI to start at Windows sign-in
+with [the local AI worker guide](docs/LOCAL_AI_WORKER.md).
 
-### Netlify frontend with a local backend
-
-For `https://campusfizz.netlify.app`, use these values in the teammate machine's
-private `backend/.env`:
-
-```dotenv
-CORS_ORIGINS=https://campusfizz.netlify.app,http://localhost:5173
-APP_URL=https://campusfizz.netlify.app
-OLLAMA_URL=http://localhost:11434/api/chat
-OLLAMA_MODEL=deepseek-r1:8b
-```
-
-Expose only FastAPI at `http://127.0.0.1:8000` through Cloudflare Tunnel. Keep
-Ollama on loopback port 11434. Set Netlify's **build-time** environment variable
-`VITE_API_URL=<HTTPS tunnel URL>` and redeploy the frontend. Use the base URL
-without `/api` or a trailing slash. Supabase remains hosted as usual.
-
-Follow [the deployment guide](docs/NETLIFY_CLOUDFLARE.md) for exact PowerShell
-commands, quick versus stable named tunnels, and CORS/health verification.
-Quick tunnel hostnames change on restart and require updating Netlify plus a new
-build; named tunnels keep their configured hostname. The guide also documents
-cold-start behavior and tunnel response limits.
+Use [the local demo guide](docs/LOCAL_DEMO.md) for sample tickets and
+troubleshooting. The ticket page refreshes its row while routing is pending and
+once after routing completes to pick up separate text enrichment. The stored AI
+routing explanation is displayed; staff can expand original student text when
+it differs from the polished version. Drafts and action forms remain intact.
+Model, policy, and frozen benchmarks are unchanged.
 
 ### Final AI holdout results
 

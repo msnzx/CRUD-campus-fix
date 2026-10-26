@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { supabase, ATTACHMENT_BUCKET } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
@@ -21,7 +21,6 @@ import {
 import type { Tables } from '../lib/database.types'
 import { uploadAttachment, validateImage } from '../lib/attachments'
 import { startPendingTicketPolling } from '../lib/ticketPolling'
-import { onClassificationFinished } from '../lib/classify'
 import { TicketAiDetails } from '../components/TicketAiDetails'
 
 interface CommentRow extends Tables<'comments'> {
@@ -168,31 +167,30 @@ export default function TicketDetailPage() {
     })
   }, [readTicket, ticket?.ai_routing_status])
 
+  const previousRouting = useRef<{ ticketId: number; status: string } | null>(null)
   useEffect(() => {
-    // Routing is persisted before enrichment. One final read after the POST
-    // ends picks up polished text even if pending polling has already stopped.
-    let active = true
-    let controller: AbortController | undefined
-    let deadline: ReturnType<typeof setTimeout> | undefined
-    const unsubscribe = onClassificationFinished((finishedId) => {
-      if (finishedId !== ticketId) return
-      controller?.abort()
-      clearTimeout(deadline)
-      const requestController = new AbortController()
-      controller = requestController
-      const timeout = setTimeout(() => requestController.abort(), 15000)
-      deadline = timeout
-      void readTicket(requestController.signal).then((next) => {
-        if (active && next) setTicket((current) => latestTicket(current, next))
-      }).catch(() => undefined).finally(() => clearTimeout(timeout))
-    })
+    const previous = previousRouting.current
+    previousRouting.current = ticket
+      ? { ticketId: ticket.ticket_id, status: ticket.ai_routing_status }
+      : null
+    if (
+      !ticket ||
+      previous?.ticketId !== ticket.ticket_id ||
+      previous.status !== 'PENDING' ||
+      ticket.ai_routing_status === 'PENDING'
+    ) return
+
+    const controller = new AbortController()
+    const timeout = setTimeout(() => {
+      void readTicket(controller.signal).then((next) => {
+        if (next) setTicket((current) => latestTicket(current, next))
+      }).catch(() => undefined)
+    }, 1500)
     return () => {
-      active = false
-      unsubscribe()
-      clearTimeout(deadline)
-      controller?.abort()
+      clearTimeout(timeout)
+      controller.abort()
     }
-  }, [readTicket, ticketId])
+  }, [readTicket, ticket])
 
   useEffect(() => {
     let active = true

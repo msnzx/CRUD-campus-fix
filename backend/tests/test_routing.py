@@ -4,6 +4,7 @@ Run from backend: python -m unittest discover -s tests -v
 No request in this suite reaches a real database or Ollama server.
 """
 
+import asyncio
 import copy
 import json
 import logging
@@ -11,7 +12,7 @@ import os
 import sys
 import unittest
 from collections import Counter
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 from fastapi.testclient import TestClient
@@ -317,16 +318,7 @@ class RoutingAPITests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
 
-    def test_5174_preflight_then_authenticated_classification(self):
-        origin = "http://localhost:5174"
-        preflight = self.http.options("/api/tickets/1/classify", headers={
-            "Origin": origin, "Access-Control-Request-Method": "POST",
-            "Access-Control-Request-Headers": "authorization,content-type",
-        })
-        self.assertEqual(preflight.status_code, 200, preflight.text)
-        self.assertEqual(preflight.headers["access-control-allow-origin"], origin)
-        self.predict.assert_not_called()
-
+    def test_authenticated_classification_and_unauthenticated_rejection(self):
         # Exercise the real authentication dependency. Only the remote Auth
         # service and database transport are mocked; no real tokens or writes.
         main.app.dependency_overrides.pop(current_caller)
@@ -337,15 +329,14 @@ class RoutingAPITests(unittest.TestCase):
         anon.auth.get_user.return_value.user.id = "student-1"
         with patch("app.auth.create_client", side_effect=[anon, self.db.client]):
             response = self.http.post("/api/tickets/1/classify", headers={
-                "Origin": origin, "Authorization": "Bearer test-user-session",
+                "Authorization": "Bearer test-user-session",
                 "Content-Type": "application/json",
             })
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.headers["access-control-allow-origin"], origin)
         self.assertEqual(response.json()["routing_status"], "AUTO_ROUTED")
         anon.auth.get_user.assert_called_once_with("test-user-session")
         self.predict.assert_called_once()
-        self.assertEqual(self.http.post("/api/tickets/1/classify", headers={"Origin": origin}).status_code, 401)
+        self.assertEqual(self.http.post("/api/tickets/1/classify").status_code, 401)
 
     def test_success_auto_routes_and_persists_effective_and_suggested_values(self):
         body = self.classify()
@@ -479,6 +470,38 @@ class RoutingAPITests(unittest.TestCase):
         self.assertIn(self.db.ticket["original_text"].strip(), self.predict.call_args.args[0])
         self.cfg.ai_classification_enabled = False
         self.assertFalse(self.http.get("/api/health").json()["ai_enabled"])
+
+
+class PendingClassificationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_recovery_loop_processes_queued_pending_tickets(self):
+        admin = MagicMock()
+        query = admin.table.return_value
+        query.select.return_value = query
+        query.eq.return_value = query
+        query.is_.return_value = query
+        query.lt.return_value = query
+        query.order.return_value = query
+        query.limit.return_value = query
+        query.execute.return_value.data = [{"ticket_id": 334}]
+        cfg = config()
+
+        with (
+            patch("app.main.create_client", return_value=admin) as create_admin,
+            patch("app.main._classify_pending_ticket") as process,
+            patch(
+                "app.main.asyncio.sleep",
+                new=AsyncMock(side_effect=[None, asyncio.CancelledError]),
+            ),
+        ):
+            with self.assertRaises(asyncio.CancelledError):
+                await main.classification_loop(cfg)
+
+        create_admin.assert_called_once_with(cfg.supabase_url, cfg.supabase_service_role_key)
+        query.eq.assert_called_once_with("ai_routing_status", "PENDING")
+        query.is_.assert_called_once_with("deleted_at", "null")
+        query.order.assert_called_once_with("created_at", desc=True)
+        query.limit.assert_called_once_with(main.CLASSIFICATION_BATCH_SIZE)
+        process.assert_called_once_with(334, admin, cfg)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ Run from backend: python -m unittest discover -s tests -v
 No request in this suite reaches a real database or Ollama server.
 """
 
+import asyncio
 import copy
 import json
 import logging
@@ -11,7 +12,7 @@ import os
 import sys
 import unittest
 from collections import Counter
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 from fastapi.testclient import TestClient
@@ -75,6 +76,7 @@ class Database:
                 "ticket_id": 1,
                 "reported_by": "student-1",
                 "title": "Bathroom sink leaking",
+                "original_title": "  sink pipe dripping!!!  ",
                 "description": "Water drips from the sink pipe under the basin.",
                 "original_text": "  My bathroom sink pipe keeps dripping.  \n",
                 "ai_routing_status": "PENDING",
@@ -227,13 +229,38 @@ class EnrichmentTests(unittest.TestCase):
 
     def test_preserves_original_text_exactly_and_only_updates_text_fields(self):
         original = self.db.ticket["original_text"]
+        original_title = self.db.ticket["original_title"]
         with patch.object(enrich, "_generate", return_value=self.polished) as generate:
             self.assertTrue(self.enrich())
         self.assertEqual(self.db.ticket["original_text"], original)
+        self.assertEqual(self.db.ticket["original_title"], original_title)
+        self.assertEqual(self.db.ticket["title"], self.polished["title"])
+        self.assertNotIn("original_title", self.db.updates[-1][1])
         self.assertEqual(generate.call_args.args, (original, "Plumbing", "MEDIUM", self.cfg))
         self.assertEqual(set(self.db.updates[-1][1]), {"original_text", "title", "description", "ai_explanation"})
         self.assertEqual(self.db.ticket["ai_explanation"], self.polished["explanation"])
         self.assertEqual(self.db.ticket["status_id"], 20)
+
+    def test_repeated_enrichment_never_writes_original_title(self):
+        original_title = self.db.ticket["original_title"]
+        result = dict(self.polished, original_title="Model must not replace this")
+        with patch.object(enrich, "_generate", return_value=result):
+            self.assertTrue(self.enrich())
+            self.assertTrue(self.enrich())
+        self.assertEqual(self.db.ticket["original_title"], original_title)
+        self.assertTrue(all("original_title" not in update for _, update in self.db.updates))
+
+    def test_legacy_missing_or_null_original_title_remains_valid(self):
+        for present in (False, True):
+            with self.subTest(present=present):
+                self.db.ticket.pop("original_title", None)
+                if present:
+                    self.db.ticket["original_title"] = None
+                with patch.object(enrich, "_generate", return_value=self.polished):
+                    self.assertTrue(self.enrich())
+                self.assertIsNone(self.db.ticket.get("original_title"))
+                self.assertEqual("original_title" in self.db.ticket, present)
+                self.assertNotIn("original_title", self.db.updates[-1][1])
 
     def test_generates_original_text_when_missing(self):
         self.db.ticket.pop("original_text")
@@ -291,6 +318,26 @@ class RoutingAPITests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
 
+    def test_authenticated_classification_and_unauthenticated_rejection(self):
+        # Exercise the real authentication dependency. Only the remote Auth
+        # service and database transport are mocked; no real tokens or writes.
+        main.app.dependency_overrides.pop(current_caller)
+        self.db.rows["users"] = [{"user_id": "student-1", "email": "student@caldwell.edu",
+                                 "active": True, "roles": {"name": "STUDENT"}}]
+        self.db.rows["user_departments"] = []
+        anon = MagicMock()
+        anon.auth.get_user.return_value.user.id = "student-1"
+        with patch("app.auth.create_client", side_effect=[anon, self.db.client]):
+            response = self.http.post("/api/tickets/1/classify", headers={
+                "Authorization": "Bearer test-user-session",
+                "Content-Type": "application/json",
+            })
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["routing_status"], "AUTO_ROUTED")
+        anon.auth.get_user.assert_called_once_with("test-user-session")
+        self.predict.assert_called_once()
+        self.assertEqual(self.http.post("/api/tickets/1/classify").status_code, 401)
+
     def test_success_auto_routes_and_persists_effective_and_suggested_values(self):
         body = self.classify()
         self.assertEqual(body["routing_status"], "AUTO_ROUTED")
@@ -312,6 +359,7 @@ class RoutingAPITests(unittest.TestCase):
             model_response({"title": "Leaking bathroom sink", "description": "The sink pipe drips.", "explanation": "A plumbing issue disrupts use."}),
         ]
         original = self.db.ticket["original_text"]
+        original_title = self.db.ticket["original_title"]
         with patch.object(routing.urllib.request, "urlopen", side_effect=responses) as send:
             body = self.classify()
         self.assertEqual(body["routing_status"], "AUTO_ROUTED")
@@ -319,6 +367,7 @@ class RoutingAPITests(unittest.TestCase):
         self.assertEqual(set(self.db.updates[1][1]), {"original_text", "title", "description", "ai_explanation"})
         self.assertEqual(self.db.ticket["original_text"], original)
         self.assertEqual(self.db.ticket["title"], "Leaking bathroom sink")
+        self.assertEqual(self.db.ticket["original_title"], original_title)
         for call in send.call_args_list:
             self.assertEqual(json.loads(call.args[0].data)["model"], self.cfg.ollama_model)
             self.assertEqual(call.args[0].full_url, self.cfg.ollama_url)
@@ -421,6 +470,38 @@ class RoutingAPITests(unittest.TestCase):
         self.assertIn(self.db.ticket["original_text"].strip(), self.predict.call_args.args[0])
         self.cfg.ai_classification_enabled = False
         self.assertFalse(self.http.get("/api/health").json()["ai_enabled"])
+
+
+class PendingClassificationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_recovery_loop_processes_queued_pending_tickets(self):
+        admin = MagicMock()
+        query = admin.table.return_value
+        query.select.return_value = query
+        query.eq.return_value = query
+        query.is_.return_value = query
+        query.lt.return_value = query
+        query.order.return_value = query
+        query.limit.return_value = query
+        query.execute.return_value.data = [{"ticket_id": 334}]
+        cfg = config()
+
+        with (
+            patch("app.main.create_client", return_value=admin) as create_admin,
+            patch("app.main._classify_pending_ticket") as process,
+            patch(
+                "app.main.asyncio.sleep",
+                new=AsyncMock(side_effect=[None, asyncio.CancelledError]),
+            ),
+        ):
+            with self.assertRaises(asyncio.CancelledError):
+                await main.classification_loop(cfg)
+
+        create_admin.assert_called_once_with(cfg.supabase_url, cfg.supabase_service_role_key)
+        query.eq.assert_called_once_with("ai_routing_status", "PENDING")
+        query.is_.assert_called_once_with("deleted_at", "null")
+        query.order.assert_called_once_with("created_at", desc=True)
+        query.limit.assert_called_once_with(main.CLASSIFICATION_BATCH_SIZE)
+        process.assert_called_once_with(334, admin, cfg)
 
 
 if __name__ == "__main__":

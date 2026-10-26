@@ -1,0 +1,5 @@
+# Optional dependencies for archived Laya comparisons and benchmark scripts.
+-r requirements.txt
+laya>=0.4.11
+scikit-learn>=1.7.0
+pandas>=2.2.0

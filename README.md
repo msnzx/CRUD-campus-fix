@@ -33,7 +33,7 @@ Requires Node 20+, Python 3.11+, and local Ollama for AI features.
 cd frontend
 cp .env.example .env     # values are already filled in; none are secret
 npm install
-npm run dev              # http://localhost:5173
+npm run dev              # open the Vite URL printed (usually 5173 or 5174)
 ```
 
 That is enough to run the whole product. The backend is optional.
@@ -69,10 +69,14 @@ available for manual review. Emergency tickets retain their existing effective
 department, priority, and status on success, review, or failure.
 
 After successful routing is saved, a separate enrichment call preserves
-`original_text` and generates a cleaned `title`, `description`, and
-`ai_explanation`. Enrichment writes only those text fields. Its failure cannot
-undo routing or turn a successful classification into an API error. Ticket
-creation never depends on either model call succeeding.
+the verbatim `original_title` and `original_text` snapshots and generates a
+cleaned `title`, `description`, and `ai_explanation`. Enrichment writes only
+those text fields. Its failure cannot undo routing or turn a successful classification into an API error. Ticket
+creation never depends on either model call succeeding. The backend polls
+Supabase for non-deleted tickets still marked `PENDING` every seven seconds,
+starting five seconds after creation, and routes them asynchronously. The
+worker runs only while the AI-enabled backend is running; classification
+failures are recorded as `FAILED` for staff review.
 
 Classification and enrichment share `OLLAMA_URL`, `OLLAMA_MODEL` (default
 `deepseek-r1:8b`), and `OLLAMA_TIMEOUT_SECONDS` (default `180`) from `backend/.env`.
@@ -82,6 +86,28 @@ reports whether AI is configured; it does not probe whether Ollama is running.
 Run backend regression tests from `backend` with
 `python -m unittest discover -s tests -v`. These exercise the API and the real
 Supabase client against an in-memory HTTP transport, without remote writes.
+Run frontend request regression tests from `frontend` with `npm test`, followed
+by `npm run typecheck` and `npm run build`.
+
+### Local AI worker for the Netlify frontend
+
+The browser writes tickets directly to Supabase. The local FastAPI backend
+polls Supabase for pending tickets, classifies them with Ollama, and writes the
+result back. No public backend URL, tunnel, browser-to-backend request, CORS
+allowlist, or `VITE_API_URL` is needed. Supabase remains hosted as usual.
+
+The backend waits five seconds after ticket creation, then checks the queue
+every seven seconds. It only starts this worker when AI and the private
+service-role key are configured. The backend machine must stay on, connected,
+and running Ollama and FastAPI; configure FastAPI to start at Windows sign-in
+with [the local AI worker guide](docs/LOCAL_AI_WORKER.md).
+
+Use [the local demo guide](docs/LOCAL_DEMO.md) for sample tickets and
+troubleshooting. The ticket page refreshes its row while routing is pending and
+once after routing completes to pick up separate text enrichment. The stored AI
+routing explanation is displayed; staff can expand original student text when
+it differs from the polished version. Drafts and action forms remain intact.
+Model, policy, and frozen benchmarks are unchanged.
 
 ### Final AI holdout results
 
@@ -95,6 +121,19 @@ modify its saved predictions.
 | Qwen3 8B (comparison only) | 80.6% | 85.5% | 54.8% |
 
 These recorded measurements cover routing; they do not evaluate writing enrichment.
+The [evaluation archive](evaluation/README.md) includes the exact 249-case dataset
+(187 development / 62 holdout), historical comparison evaluator, both frozen
+prediction files, hashes, and accuracy/F1/latency results. Reproduce the metrics
+without model calls or dependencies from the repository root:
+
+```bash
+python evaluation/reproduce_metrics.py --check
+```
+
+The holdout was used once for final model selection and must not be used for
+future tuning or inference comparisons. See the [frozen pre-RAG baseline](docs/AI_BASELINE.md)
+for architecture, limits, configuration, original-submission preservation, and
+the evaluation freeze policy. No holdout inference was rerun for this freeze.
 
 ### 3. Database
 
@@ -102,8 +141,11 @@ Migrations in `supabase/migrations/` are the source of truth. Before enabling
 writing enrichment on an existing deployment, apply the committed
 `20261023023720_ticket_ai_explanation.sql` migration through your normal migration workflow.
 It adds nullable `tickets.ai_explanation` text without changing existing reports
-or routing permissions. This synchronization does not apply migrations to the
-hosted database. Never edit schema through the dashboard.
+or routing permissions. Also apply `20261025203513_ticket_original_title.sql`
+before deploying this frontend: it adds nullable `tickets.original_title`,
+captures titles on insert, and protects the original on later updates. Existing
+rows remain null rather than copying an already-polished title. This work does
+not apply migrations to the hosted database. Never edit schema through the dashboard.
 
 ## Campus map
 
@@ -175,16 +217,5 @@ advisors page, after any migration. It should report zero findings.
 
 ## Running the AI classifier from a developer machine
 
-The classifier uses a local Ollama model, so the backend runs on whichever
-machine has Ollama. To let the deployed Netlify site use it:
-
-1. `ollama pull deepseek-r1:8b`, then start the backend (`uvicorn app.main:app --port 8000` from `backend/`).
-2. Expose it over HTTPS with a tunnel, e.g. `cloudflared tunnel --url http://localhost:8000`
-   (quick, URL changes per run) or a named Cloudflare Tunnel (stable URL).
-3. In `backend/.env` set `CORS_ORIGINS` and `APP_URL` to the Netlify site URL
-   (comma-separate to keep `http://localhost:5173`).
-4. In Netlify set `VITE_API_URL` to the tunnel URL and redeploy.
-
-While that machine is off, tickets still submit and stay `PENDING`. When the
-backend comes back, its sweeper (`app/sweep.py`) classifies them within a few
-minutes. Check `GET <tunnel-url>/api/health` for `ai_enabled: true`.
+See `docs/LOCAL_AI_WORKER.md`. The backend polls Supabase from the machine that
+has Ollama; there is no tunnel or public backend URL.

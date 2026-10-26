@@ -43,3 +43,10 @@ NEXT_STEPS.private.md
 backend/evaluation_results*/
 backend/archive/
 *.zip
+
+# Cloudflare account certificates and tunnel credentials stay outside Git
+.cloudflared/
+
+# Fresh evaluation runs are not part of the frozen benchmark
+evaluation/evaluation_results_holdout/
+evaluation/runs/

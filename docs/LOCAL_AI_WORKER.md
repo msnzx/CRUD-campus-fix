@@ -13,19 +13,33 @@ The backend must be running for automatic routing, so keep this machine awake
 and connected to the internet. Run exactly one backend worker to avoid duplicate
 model work.
 
-## Run manually
+## Start and stop for a demo
 
-Ollama should be running on `127.0.0.1:11434`, with `deepseek-r1:8b` available.
-From the repository root:
+From the repository root in PowerShell, start both Ollama and the backend worker:
 
 ```powershell
-Set-Location backend
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+.\scripts\start-ai-worker.ps1
 ```
 
-Confirm configuration with `Invoke-RestMethod http://127.0.0.1:8000/api/health`.
-The health endpoint's `ai_enabled` field reports configuration; it does not
-perform a model inference check.
+When the demo is over, stop both:
+
+```powershell
+.\scripts\stop-ai-worker.ps1
+```
+
+In Command Prompt (`cmd.exe`), run the same scripts through PowerShell:
+
+```bat
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start-ai-worker.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stop-ai-worker.ps1
+```
+
+The start command launches Ollama if needed, verifies the configured model is
+installed, then starts the worker in the background. The stop command stops the
+worker and Ollama. The worker logs are saved under
+`%LOCALAPPDATA%\CampusFix\`. Check the backend with
+`Invoke-RestMethod http://127.0.0.1:8000/api/health`. Its `ai_enabled` field
+reports configuration; it does not perform a model inference check.
 
 The authenticated `/api/tickets/{ticket_id}/classify` endpoint remains
 available for authorized manual requests, but the browser does not call it.
@@ -33,55 +47,16 @@ Classification errors are stored as `FAILED` for staff review. Tickets remain
 visible and usable if this machine is offline; automatic routing resumes for
 pending tickets when the worker restarts.
 
-## Start the worker at Windows sign-in
-
-Run the following once in PowerShell as the Windows user who runs Ollama.
-It registers one Task Scheduler task, waits briefly for the Ollama app to
-start, starts FastAPI at sign-in, and ignores duplicate task launches:
+The worker and Ollama are not configured to start at sign-in. The start script
+disables the legacy scheduled task and Ollama startup shortcut if they exist.
+To inspect service health while running:
 
 ```powershell
-$backend = (Resolve-Path .\backend).Path
-$python = Join-Path $backend '.venv\Scripts\python.exe'
-$taskName = 'CampusFix AI Worker'
-$action = New-ScheduledTaskAction `
-  -Execute $python `
-  -Argument '-m uvicorn app.main:app --host 127.0.0.1 --port 8000' `
-  -WorkingDirectory $backend
-$trigger = New-ScheduledTaskTrigger `
-  -AtLogOn `
-  -User "$env:USERDOMAIN\$env:USERNAME" `
-  -RandomDelay (New-TimeSpan -Seconds 30)
-$settings = New-ScheduledTaskSettingsSet `
-  -StartWhenAvailable `
-  -MultipleInstances IgnoreNew `
-  -RestartCount 3 `
-  -RestartInterval (New-TimeSpan -Minutes 1) `
-  -ExecutionTimeLimit ([TimeSpan]::Zero) `
-  -DontStopIfGoingOnBatteries
-$principal = New-ScheduledTaskPrincipal `
-  -UserId "$env:USERDOMAIN\$env:USERNAME" `
-  -LogonType Interactive `
-  -RunLevel Limited
-Register-ScheduledTask `
-  -TaskName $taskName `
-  -Action $action `
-  -Trigger $trigger `
-  -Settings $settings `
-  -Principal $principal `
-  -Description 'Poll Supabase for CampusFix tickets and route them with local Ollama.' `
-  -Force
+Invoke-RestMethod http://127.0.0.1:8000/api/health
+Invoke-RestMethod http://127.0.0.1:11434/api/tags
 ```
 
-The task runs as the current user, reads the existing private `backend/.env`,
-and listens only on loopback. To start or inspect it immediately:
-
-```powershell
-Start-ScheduledTask -TaskName 'CampusFix AI Worker'
-Get-ScheduledTask -TaskName 'CampusFix AI Worker' | Select-Object TaskName, State
-```
-
-Do not also start Uvicorn manually while the task is running. To remove the
-sign-in task later:
+To remove the old scheduled task completely, if desired:
 
 ```powershell
 Unregister-ScheduledTask -TaskName 'CampusFix AI Worker' -Confirm:$false

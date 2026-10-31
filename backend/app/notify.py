@@ -11,6 +11,7 @@ with exponential backoff until MAX_ATTEMPTS.
 """
 
 import asyncio
+import html
 import logging
 import smtplib
 from datetime import datetime, timedelta, timezone
@@ -25,6 +26,18 @@ log = logging.getLogger("campusfix.notify")
 MAX_ATTEMPTS = 5
 BATCH_SIZE = 50
 
+# Subject per notification `type` (written by the triggers in the
+# ticket_workflow migration). Unknown types fall back to the generic subject.
+SUBJECTS = {
+    "STATUS_CHANGED": "CampusFix: your ticket status changed",
+    "ASSIGNED": "CampusFix: a ticket was assigned to you",
+    "COMMENT": "CampusFix: new comment on a ticket",
+    "REOPEN_REQUESTED": "CampusFix: reopen request needs a decision",
+    "REOPEN_DENIED": "CampusFix: your reopen request was declined",
+    "EMERGENCY": "CampusFix: EMERGENCY ticket reported",
+}
+DEFAULT_SUBJECT = "CampusFix update"
+
 
 def _due(row: dict, now: datetime) -> bool:
     """PENDING is always due. FAILED waits 2^attempts minutes between tries."""
@@ -34,12 +47,26 @@ def _due(row: dict, now: datetime) -> bool:
     return now - last >= timedelta(minutes=2 ** row["attempts"])
 
 
-def _send(cfg: Settings, to: str, subject: str, body: str) -> None:
+def _html_body(message: str, link: str) -> str:
+    return (
+        '<div style="font-family:Arial,sans-serif;max-width:520px;margin:auto">'
+        f'<p style="font-size:15px;color:#222">{html.escape(message)}</p>'
+        f'<p><a href="{html.escape(link, quote=True)}" style="display:inline-block;'
+        'padding:10px 18px;background:#1d4ed8;color:#fff;text-decoration:none;'
+        'border-radius:6px">View in CampusFix</a></p>'
+        '<p style="font-size:12px;color:#777">You receive this because of activity '
+        "on a CampusFix ticket you're involved in.</p></div>"
+    )
+
+
+def _send(cfg: Settings, to: str, subject: str, body: str, html_body: str | None = None) -> None:
     msg = EmailMessage()
     msg["From"] = cfg.smtp_from
     msg["To"] = to
     msg["Subject"] = subject
     msg.set_content(body)
+    if html_body:
+        msg.add_alternative(html_body, subtype="html")
     with smtplib.SMTP(cfg.smtp_host, cfg.smtp_port, timeout=15) as smtp:
         smtp.starttls()
         if cfg.smtp_user:
@@ -51,7 +78,7 @@ def dispatch_pending(admin: Client, cfg: Settings) -> dict:
     """Send one batch. Returns counts, for the admin endpoint and the logs."""
     rows = (
         admin.table("notifications")
-        .select("notification_id, ticket_id, message, delivery_status, attempts, "
+        .select("notification_id, ticket_id, type, message, delivery_status, attempts, "
                 "last_attempt_at, users(email, active)")
         .in_("delivery_status", ["PENDING", "FAILED"])
         .lt("attempts", MAX_ATTEMPTS)
@@ -74,7 +101,13 @@ def dispatch_pending(admin: Client, cfg: Settings) -> dict:
             if not user.get("active") or not user.get("email"):
                 raise RuntimeError("Recipient has no active account")
             link = f"{cfg.app_url}/tickets/{row['ticket_id']}" if row.get("ticket_id") else cfg.app_url
-            _send(cfg, user["email"], "CampusFix update", f"{row['message']}\n\n{link}\n")
+            _send(
+                cfg,
+                user["email"],
+                SUBJECTS.get(row.get("type"), DEFAULT_SUBJECT),
+                f"{row['message']}\n\n{link}\n",
+                _html_body(row["message"], link),
+            )
             update.update(delivery_status="SENT", error_message=None)
             sent += 1
         except Exception as exc:  # noqa: BLE001 — every failure is recorded, none is fatal

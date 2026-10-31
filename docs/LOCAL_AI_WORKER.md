@@ -61,3 +61,22 @@ To remove the old scheduled task completely, if desired:
 ```powershell
 Unregister-ScheduledTask -TaskName 'CampusFix AI Worker' -Confirm:$false
 ```
+
+## Email notifications (Brevo SMTP)
+
+The same worker emails notification rows (status change, assignment, comment,
+reopen request/decision, emergency) when `SMTP_HOST` is set in `backend/.env`.
+This is separate from Supabase Auth's signup and password-reset emails, which
+use the SMTP settings in the Supabase dashboard (Auth > SMTP Settings); point
+both at Brevo to get one sender.
+
+1. In Brevo: SMTP & API > SMTP. Copy the SMTP login and generate an SMTP key.
+2. In Brevo: Senders, Domains & IPs. Verify the address you will send from.
+3. Set `SMTP_HOST`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` (see
+   `backend/.env.example`) and restart the worker.
+4. `Invoke-RestMethod http://127.0.0.1:8000/api/health` should report
+   `email_enabled: true`.
+
+Failures are recorded on the `notifications` row (`delivery_status`,
+`attempts`, `error_message`) and retried with backoff up to 5 times. Emails are
+only sent while the worker is running; pending rows go out when it restarts.

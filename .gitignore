@@ -37,7 +37,7 @@ Thumbs.db
 *.tsbuildinfo
 
 # Private planning notes
-NEXT_STEPS.private.md
+*.private.md
 
 # Local AI results, archives, and distribution bundles
 backend/evaluation_results*/

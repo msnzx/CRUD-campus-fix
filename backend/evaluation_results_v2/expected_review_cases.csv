@@ -1,0 +1,12 @@
+case_id,text,expected_issue_type,expected_department,expected_priority,expected_action,difficulty,noise_type,pred_issue_type,pred_department,pred_priority,confidence,latency_seconds
+CFB-0193,I need help with something that does not match any listed Campus Fix category.,Other,Other / Review,NEEDS_REVIEW,NEEDS_REVIEW,easy,none,Other,Other / Review,MEDIUM,0.0,2.4507064999779686
+CFB-0194,Not sure where this goes: I have a question about tutoring appointments.,Other,Other / Review,NEEDS_REVIEW,NEEDS_REVIEW,easy,none,Other,Other / Review,MEDIUM,0.0,2.4726679000013974
+CFB-0195,Can someone help with my immigration paperwork?,Other,Other / Review,NEEDS_REVIEW,NEEDS_REVIEW,medium,recurrence/context,Other,Other / Review,MEDIUM,0.0,2.4159049000008963
+CFB-0196,I need academic advising about which course to take.,Other,Other / Review,NEEDS_REVIEW,NEEDS_REVIEW,medium,safety/scope,Other,Other / Review,MEDIUM,0.0,2.4438245000201277
+CFB-0198,Please route this somewhere: question about counseling services.,Other,Other / Review,NEEDS_REVIEW,NEEDS_REVIEW,hard,sentiment/adversarial,Other,Other / Review,MEDIUM,0.0,2.372830900014378
+CFB-0203,Something is wrong with the elevator.,Elevator,Facilities,NEEDS_REVIEW,NEEDS_REVIEW,hard,minimal/vague,Elevator,Facilities,MEDIUM,0.0,2.416850700014038
+CFB-0204,Sink leaking AND I also cannot log into Canvas.,Other,Other / Review,NEEDS_REVIEW,NEEDS_REVIEW,hard,multi-issue,Other,Other / Review,HIGH,0.0,2.433981899986975
+CFB-0205,My roommate is threatening me and the laundry machine ate my card.,Other,Other / Review,NEEDS_REVIEW,NEEDS_REVIEW,hard,multi-issue,Other,Other / Review,URGENT,0.0,2.448888499988243
+CFB-0206,"Projector broken, also my tuition bill is wrong.",Other,Other / Review,NEEDS_REVIEW,NEEDS_REVIEW,hard,multi-issue,Other,Other / Review,MEDIUM,0.0,2.4420685000077356
+CFB-0207,The Wi-Fi is down in my room. Also the sink is flooding.,Other,Other / Review,NEEDS_REVIEW,NEEDS_REVIEW,hard,multi-issue,Other,Other / Review,MEDIUM,0.0,2.433173199999146
+CFB-0208,The vending machine took my money; also I lost my ID.,Other,Other / Review,NEEDS_REVIEW,NEEDS_REVIEW,hard,multi-issue,Vending,IT,MEDIUM,0.0,2.468187000020407

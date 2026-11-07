@@ -14,7 +14,6 @@ endpoint re-checks access explicitly. See app/auth.py.
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from pydantic import BaseModel
@@ -26,13 +25,15 @@ from .classify import classify
 from .config import Settings, get_settings
 from .enrich import enrich_ticket
 from .notify import dispatch_loop, dispatch_pending
+from .knowledge.api import router as knowledge_router
+from .observability.api import router as observability_router
+from .observability.runtime import configure as configure_monitoring, pulse, outcome, observed_call
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("campusfix")
 
 settings = get_settings()
 
-PENDING_CLASSIFICATION_DELAY = timedelta(seconds=5)
 CLASSIFICATION_CHECK_INTERVAL_SECONDS = 7
 CLASSIFICATION_BATCH_SIZE = 3
 
@@ -40,6 +41,14 @@ CLASSIFICATION_BATCH_SIZE = 3
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     tasks = []
+    configure_monitoring(settings)
+    if settings.observability_enabled and settings.admin_enabled:
+        from .observability.monitor import monitor_loop
+        tasks.append(asyncio.create_task(monitor_loop(settings)))
+    if settings.vision_mode == 'shadow':
+        log.warning('Vision shadow requested but policy-blocked: no production provider is registered.')
+    if settings.admin_enabled:
+        tasks.append(asyncio.create_task(safety_retry_loop(settings)))
     if settings.ai_enabled:
         tasks.append(asyncio.create_task(classification_loop(settings)))
     if settings.email_enabled:
@@ -54,6 +63,25 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="CampusFix API", version="0.1.0", lifespan=lifespan)
+app.include_router(knowledge_router)
+app.include_router(observability_router)
+
+
+async def safety_retry_loop(cfg: Settings) -> None:
+    """Recover safety notification creation independently of AI and SMTP."""
+    admin = create_client(cfg.supabase_url, cfg.supabase_service_role_key)
+    while True:
+        await asyncio.sleep(30)
+        pulse(cfg,'safety_retry')
+        try:
+            await asyncio.to_thread(observed_call,cfg,'safety_retry',lambda: admin.rpc("retry_safety_escalations", {}).execute())
+            outcome(cfg,'safety_retry',True)
+        except asyncio.CancelledError:
+            outcome(cfg,'safety_retry',False)
+            raise
+        except Exception:
+            outcome(cfg,'safety_retry',False)
+            log.exception("Safety escalation recovery failed",exc_info=False)
 
 
 class Health(BaseModel):
@@ -61,6 +89,9 @@ class Health(BaseModel):
     ai_enabled: bool
     admin_enabled: bool
     email_enabled: bool
+    vision_mode: str
+    vision_execution: str
+    vision_paid_calls_enabled: bool
 
 
 class ClassifyResult(BaseModel):
@@ -80,6 +111,9 @@ def health() -> Health:
         ai_enabled=settings.ai_enabled,
         admin_enabled=settings.admin_enabled,
         email_enabled=settings.email_enabled,
+        vision_mode=settings.vision_mode,
+        vision_execution='DISABLED' if settings.vision_mode == 'disabled' else 'POLICY_BLOCKED',
+        vision_paid_calls_enabled=False,
     )
 
 
@@ -163,12 +197,12 @@ def _process_classification(
         confidence=result.confidence,
     )
     outcome = committed["result"]
-    if outcome not in (ai_jobs.COMMITTED_AUTO_ROUTED, ai_jobs.COMMITTED_NEEDS_REVIEW):
-        return _not_applied(ticket, committed)
     if committed.get("urgent_notifications"):
         log.info("AI-URGENT ticket %s paged %s staff", ticket_id, committed["urgent_notifications"])
     if committed.get("notification_error"):
-        log.warning("AI-URGENT notification failed for ticket %s: %s", ticket_id, committed["notification_error"])
+        log.warning("AI-URGENT notification failed for ticket %s; inspect protected recovery state", ticket_id)
+    if outcome not in (ai_jobs.COMMITTED_AUTO_ROUTED, ai_jobs.COMMITTED_NEEDS_REVIEW):
+        return _not_applied(ticket, committed)
 
     routed = outcome == ai_jobs.COMMITTED_AUTO_ROUTED
     # Writing enrichment is intentionally separate from routing. If it fails,
@@ -181,9 +215,11 @@ def _process_classification(
                 issue_type_id=result.issue_type_id,
                 priority_id=result.priority_id,
                 settings=cfg,
+                analysis_token=committed.get("analysis_id"),
+                expected_revision=committed.get("enrichment_revision"),
             )
         except Exception as exc:
-            log.warning("Enrichment failed after routing ticket %s: %s", ticket_id, exc)
+            log.warning("Enrichment failed after routing ticket %s (%s)", ticket_id, type(exc).__name__)
 
     return ClassifyResult(
         ticket_id=ticket_id,
@@ -225,16 +261,23 @@ def _classify_pending_ticket(
         routing_status, detail = _NOT_CLAIMED.get(reason, ("PENDING", f"Not claimed ({reason})."))
         return ClassifyResult(ticket_id=ticket_id, routing_status=routing_status, detail=detail)
 
+    return _run_claimed_ticket(claimed, admin, cfg)
+
+
+def _run_claimed_ticket(claimed: dict, admin: Client, cfg: Settings) -> ClassifyResult:
+    ticket_id = claimed["ticket"]["ticket_id"]
     token = claimed["claim_token"]
     try:
-        return _process_classification(claimed["ticket"], admin, cfg, token)
+        return observed_call(cfg,'classification_attempt',_process_classification,claimed["ticket"],admin,cfg,token)
     except Exception as exc:
         # The lease would expire on its own; releasing it lets the next attempt
         # start promptly. Releasing never applies a partial result.
         try:
+            # Existing ticket-scoped recovery diagnostics retain their protected
+            # detail; global logs and observability never export that payload.
             ai_jobs.release(admin, ticket_id, token, f"{type(exc).__name__}: {exc}")
         except Exception:
-            log.exception("Could not release AI claim for ticket %s", ticket_id)
+            log.error("Could not release AI claim for ticket %s", ticket_id)
         raise
 
 
@@ -243,29 +286,34 @@ async def classification_loop(cfg: Settings) -> None:
     admin = create_client(cfg.supabase_url, cfg.supabase_service_role_key)
     while True:
         await asyncio.sleep(CLASSIFICATION_CHECK_INTERVAL_SECONDS)
+        pulse(cfg,'classification')
+        batch_ok=True
         try:
-            cutoff = (datetime.now(timezone.utc) - PENDING_CLASSIFICATION_DELAY).isoformat()
-            rows = (
-                admin.table("tickets")
-                .select("ticket_id")
-                .eq("ai_routing_status", "PENDING")
-                .is_("deleted_at", "null")
-                .lt("created_at", cutoff)
-                .order("created_at", desc=True)
-                .limit(CLASSIFICATION_BATCH_SIZE)
-                .execute()
-            ).data or []
-            for row in rows:
-                result = await asyncio.to_thread(
-                    _classify_pending_ticket, row["ticket_id"], admin, cfg
-                )
-                log.info(
-                    "Pending ticket recovery completed ticket=%s routing_status=%s",
-                    result.ticket_id,
-                    result.routing_status,
-                )
+            for _ in range(CLASSIFICATION_BATCH_SIZE):
+                # Claim only work about to run: queued claims must not expire
+                # while another model call occupies this worker.
+                try:
+                    claimed = await asyncio.to_thread(ai_jobs.claim_next, admin, cfg)
+                    if not claimed.get("claimed"):
+                        if claimed.get("reason") == "empty":
+                            break
+                        continue
+                    pulse(cfg,'classification')
+                    result = await asyncio.to_thread(observed_call,cfg,'classification',_run_claimed_ticket, claimed, admin, cfg)
+                    if result.routing_status=='FAILED': batch_ok=False
+                    log.info("Ticket recovery completed ticket=%s routing_status=%s",
+                             result.ticket_id, result.routing_status)
+                except Exception:
+                    batch_ok=False
+                    log.error("Classification job failed; continuing batch")
+        except asyncio.CancelledError:
+            batch_ok=False
+            raise
         except Exception:
-            log.exception("Pending ticket recovery failed")
+            batch_ok=False
+            log.error("Pending ticket recovery failed")
+        finally:
+            outcome(cfg,'classification',batch_ok)
 
 
 @app.post("/api/tickets/{ticket_id}/classify", response_model=ClassifyResult)

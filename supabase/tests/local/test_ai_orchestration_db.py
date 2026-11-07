@@ -28,6 +28,10 @@ SIGNATURES = {
     "ai_commit_classification": [("p_ticket_id", "bigint"), ("p_claim_token", "uuid"), ("p_outcome", "text"),
                                  ("p_department_id", "integer"), ("p_issue_type_id", "integer"),
                                  ("p_priority_id", "integer"), ("p_confidence", "numeric")],
+    "ai_commit_enrichment": [("p_ticket_id","bigint"),("p_analysis_token","uuid"),
+                             ("p_expected_revision","bigint"),("p_text","jsonb")],
+    "ai_claim_next_ticket": [("p_worker","text"),("p_lease_seconds","integer"),
+                             ("p_max_attempts","integer"),("p_min_age_seconds","integer")],
     "ai_release_claim": [("p_ticket_id", "bigint"), ("p_claim_token", "uuid"), ("p_error", "text")],
     "ai_request_reclassification": [("p_ticket_id", "bigint"), ("p_requested_by", "uuid")],
     "ai_register_manual_request": [("p_ticket_id", "bigint"), ("p_is_staff", "boolean"),
@@ -349,29 +353,32 @@ class AiOrchestrationDbTests(unittest.TestCase):
     # ---- 4. AI-URGENT paging (F-2) -------------------------------------------
 
     def test_ai_urgent_pages_active_department_members_once(self):
+        self.safety_member()
         c = harness.connect(self.uri)
         self.addCleanup(c.close)
         c.execute("update public.users set active = false where email = 'fac.staff2@caldwell.edu'")
-        self.addCleanup(lambda: harness.connect(self.uri).execute(
+        self.addCleanup(lambda: c.execute(
             "update public.users set active = true where email = 'fac.staff2@caldwell.edu'"))
         t = self.new_ticket()
         r = self.commit(t, self.claim(t)["claim_token"], prio="URGENT")
-        self.assertEqual(r["urgent_notifications"], 2)
-        expected = sorted([self.users["fac.admin@caldwell.edu"], self.users["fac.staff@caldwell.edu"]])
+        self.assertEqual(r["urgent_notifications"], 3)
+        expected = sorted([self.users["fac.admin@caldwell.edu"], self.users["fac.staff@caldwell.edu"], self.users["it.staff@caldwell.edu"]])
         self.assertEqual([n["user_id"] for n in self.notifications(t, "AI_URGENT")], expected)
         # Staff re-run with the same verdict: nobody is paged twice.
         self.rpc(self.svc(), "ai_request_reclassification", t, self.users["fac.admin@caldwell.edu"])
         r = self.commit(t, self.claim(t)["claim_token"], prio="URGENT")
         self.assertEqual((r["result"], r["urgent_notifications"]), ("COMMITTED_AUTO_ROUTED", 0))
-        self.assertEqual(len(self.notifications(t, "AI_URGENT")), 2)
+        self.assertEqual(len(self.notifications(t, "AI_URGENT")), 3)
         # The database itself refuses a duplicate, whatever the caller.
         with self.assertRaisesRegex(Exception, "ux_notifications_ai_urgent_once"):
             c.execute("insert into public.notifications (user_id, ticket_id, type, message) values (%s, %s, 'AI_URGENT', 'dup')",
                       (expected[0], t))
 
     def test_emergency_ticket_is_not_paged_twice_and_keeps_campus_safety(self):
+        self.safety_member()
         t = self.new_ticket(emergency=True, text="Smoke coming from the outlet")
         insert_pages = self.notifications(t, "EMERGENCY")
+        self.assertEqual(len(insert_pages), 1)
         r = self.commit(t, self.claim(t)["claim_token"], dept="Facilities", prio="URGENT", issue="Electrical")
         self.assertEqual((r["result"], r["urgent_notifications"]), ("COMMITTED_AUTO_ROUTED", 0))
         self.assertEqual(self.notifications(t, "AI_URGENT"), [])
@@ -381,7 +388,7 @@ class AiOrchestrationDbTests(unittest.TestCase):
                          (self.dept["Campus Safety"], self.prio["URGENT"], "NEW"))
 
     def test_non_urgent_review_and_failed_results_page_nobody(self):
-        for outcome, prio in (("ROUTED", "HIGH"), ("REVIEW", "URGENT"), ("FAILED", None)):
+        for outcome, prio in (("ROUTED", "HIGH"), ("REVIEW", "HIGH"), ("FAILED", None)):
             with self.subTest(outcome=outcome):
                 t = self.new_ticket()
                 self.commit(t, self.claim(t)["claim_token"], outcome=outcome, prio=prio,
@@ -389,11 +396,161 @@ class AiOrchestrationDbTests(unittest.TestCase):
                 self.assertEqual(self.notifications(t, "AI_URGENT"), [])
 
     def test_concurrent_commits_cannot_double_page(self):
+        self.safety_member()
         t = self.new_ticket()
         token = self.claim(t)["claim_token"]
         results = self.parallel(lambda i: self.commit(t, token, prio="URGENT", c=self.fresh()), 6)
         self.assertEqual(sorted(r["result"] for r in results).count("COMMITTED_AUTO_ROUTED"), 1)
-        self.assertEqual(len(self.notifications(t, "AI_URGENT")), 3)  # fac.admin, fac.staff, fac.staff2
+        self.assertEqual(len(self.notifications(t, "AI_URGENT")), 4)  # department plus safety
+
+    # ---- Layer 7.2 safety escalation ----------------------------------------
+
+    def safety_member(self):
+        c = harness.connect(self.uri)
+        self.addCleanup(c.close)
+        # Reuse an existing staff account and overlap departments to test DISTINCT.
+        c.execute("insert into public.user_departments(user_id, department_id) values (%s,%s) on conflict do nothing",
+                  (self.users["it.staff@caldwell.edu"], self.dept["Campus Safety"]))
+        self.addCleanup(lambda: c.execute(
+            "delete from public.user_departments where user_id=%s and department_id=%s",
+            (self.users["it.staff@caldwell.edu"], self.dept["Campus Safety"])))
+        return c
+
+    def test_null_claim_token_cannot_commit_after_release(self):
+        t = self.new_ticket()
+        token = self.claim(t)["claim_token"]
+        self.rpc(self.svc(), "ai_release_claim", t, token, "test release")
+        result = self.commit(t, None, prio="URGENT")
+        self.assertEqual(result["result"], "LEASE_LOST")
+        self.assertEqual(self.ticket(t)["ai_routing_status"], "PENDING")
+        self.assertEqual(self.notifications(t, "AI_URGENT"), [])
+
+    def test_safety_both_teams_overlap_and_concurrent_retries(self):
+        self.safety_member()
+        t = self.new_ticket()
+        self.commit(t, self.claim(t)["claim_token"], prio="URGENT")
+        self.assertEqual(len(self.notifications(t, "AI_URGENT")), 4)
+        self.parallel(lambda i: self.fresh().execute(
+            "select public.escalate_ticket_safety(%s)", (t,)).fetchone(), 6)
+        self.assertEqual(len(self.notifications(t, "AI_URGENT")), 4)
+        # Safety receives a notification, without gaining access to the ticket.
+        safety = self.conn("it.staff@caldwell.edu")
+        self.assertEqual(safety.execute("select count(*) as n from public.tickets where ticket_id=%s", (t,)).fetchone()["n"], 0)
+        for email in ("student2@caldwell.edu", "fac.staff@caldwell.edu", "sys.admin@caldwell.edu"):
+            caller = self.conn(email)
+            with self.assertRaises(Exception):
+                caller.execute("select public.escalate_ticket_safety(%s)", (t,))
+            with self.assertRaises(Exception):
+                caller.execute("update public.ticket_safety_escalations set status='PENDING' where ticket_id=%s", (t,))
+        anon = self.fresh()
+        anon.execute("reset role")
+        anon.execute("set role anon")
+        with self.assertRaises(Exception):
+            anon.execute("select public.retry_safety_escalations()")
+
+    def test_safety_missing_department_review_pages_safety(self):
+        self.safety_member()
+        t = self.new_ticket()
+        result = self.commit(t, self.claim(t)["claim_token"], dept=None, prio="URGENT")
+        self.assertEqual(result["result"], "COMMITTED_NEEDS_REVIEW")
+        self.assertEqual([n["user_id"] for n in self.notifications(t, "AI_URGENT")],
+                         [self.users["it.staff@caldwell.edu"]])
+
+    def test_safety_inactive_department_and_overlapping_memberships(self):
+        c = self.safety_member()
+        c.execute("insert into public.departments(name,active) values ('Safety retired',false) on conflict do nothing")
+        dept = c.execute("select department_id from public.departments where name='Safety retired'").fetchone()["department_id"]
+        self.dept["Safety retired"] = dept
+        t = self.new_ticket()
+        self.commit(t, self.claim(t)["claim_token"], dept="Safety retired", prio="URGENT")
+        self.assertEqual([n["user_id"] for n in self.notifications(t, "AI_URGENT")],
+                         [self.users["it.staff@caldwell.edu"]])
+        t = self.new_ticket()
+        self.commit(t, self.claim(t)["claim_token"], dept="IT", prio="URGENT")
+        self.assertEqual(len(self.notifications(t, "AI_URGENT")), 1)
+
+    def test_safety_previous_pages_and_missing_team_recovery(self):
+        t = self.new_ticket()
+        self.commit(t, self.claim(t)["claim_token"], prio="URGENT")
+        c = self.safety_member()
+        # Simulate earlier department paging, including a legacy emergency page.
+        c.execute("insert into public.notifications(user_id,ticket_id,type,message) values (%s,%s,'EMERGENCY','old page')",
+                  (self.users["fac.staff@caldwell.edu"], t))
+        c.execute("select public.escalate_ticket_safety(%s)", (t,))
+        pages = self.notifications(t, "AI_URGENT")
+        self.assertEqual(len(pages), 3)
+        self.assertNotIn(self.users["fac.staff@caldwell.edu"], [n["user_id"] for n in pages])
+        c.execute("select public.escalate_ticket_safety(%s)", (t,))
+        self.assertEqual(len(self.notifications(t, "AI_URGENT")), 3)
+
+    def test_safety_backfill_adds_safety_without_repeating_legacy_ai_pages(self):
+        c = self.safety_member()
+        t = self.new_ticket()
+        self.commit(t, self.claim(t)["claim_token"], prio="URGENT")
+        # Represent a 7.1 ticket: department pages exist, safety has not been paged.
+        c.execute("delete from public.notifications where ticket_id=%s and user_id=%s and type='AI_URGENT'",
+                  (t, self.users["it.staff@caldwell.edu"]))
+        c.execute("delete from public.ticket_safety_escalations where ticket_id=%s", (t,))
+        migration = (harness.MIGRATIONS / "20261106120000_safety_escalation.sql").read_text()
+        backfill = migration[migration.rindex("insert into public.ticket_safety_escalations"):]
+        c.execute(backfill)
+        c.execute(backfill)
+        # Simulate the subsequent Batch 1 upgrade's legacy revision stamp.
+        batch = (harness.MIGRATIONS / "20261106140000_batch1_ai_reliability.sql").read_text()
+        start = batch.index("update public.ticket_safety_escalations e set report_revision")
+        c.execute(batch[start:batch.index(";",start)+1])
+        self.svc().execute("select public.retry_safety_escalations()")
+        self.assertEqual(len(self.notifications(t, "AI_URGENT")), 4)
+
+    def test_safety_retry_backoff_withdrawal_and_diagnostics_rls(self):
+        t = self.new_ticket()
+        self.commit(t, self.claim(t)["claim_token"], prio="URGENT")
+        c = self.svc()
+        row = c.execute("select * from public.ticket_safety_escalations where ticket_id=%s", (t,)).fetchone()
+        self.assertEqual((row["status"], row["attempts"]), ("FAILED", 1))
+        c.execute("select public.retry_safety_escalations()")
+        self.assertEqual(c.execute("select attempts from public.ticket_safety_escalations where ticket_id=%s", (t,)).fetchone()["attempts"], 1)
+        for email, count in (("student2@caldwell.edu", 0), ("it.staff@caldwell.edu", 0),
+                             ("fac.staff@caldwell.edu", 1), ("sys.admin@caldwell.edu", 1)):
+            self.assertEqual(self.conn(email).execute(
+                "select count(*) as n from public.ticket_safety_escalations where ticket_id=%s", (t,)).fetchone()["n"], count)
+        c.execute("update public.tickets set deleted_at=now() where ticket_id=%s", (t,))
+        c.execute("select public.escalate_ticket_safety(%s)", (t,))
+        self.assertEqual(c.execute("select status from public.ticket_safety_escalations where ticket_id=%s", (t,)).fetchone()["status"], "CANCELLED")
+        self.assertEqual(self.notifications(t, "AI_URGENT"), [])
+
+    def test_existing_workflow_security_sql_regressions(self):
+        c = harness.connect(self.uri)
+        self.addCleanup(c.close)
+        script = (harness.REPO / "supabase/tests/workflow_and_security.sql").read_text(encoding="utf-8")
+        try:
+            c.execute(script.rsplit("rollback;", 1)[0])
+            rows = c.execute("select * from results").fetchall()
+            self.assertTrue(rows)
+            self.assertEqual([r for r in rows if not r["pass"]], [])
+        finally:
+            c.execute("rollback")
+
+    def test_safety_failure_is_durable_and_recovers_without_ai(self):
+        c = self.safety_member()
+        c.execute("""create function public.test_fail_page() returns trigger language plpgsql as $$
+          begin if new.type='AI_URGENT' then raise exception 'injected notification failure'; end if;
+          return new; end $$;
+          create trigger test_fail_page before insert on public.notifications
+            for each row execute function public.test_fail_page();""")
+        self.addCleanup(lambda: c.execute("drop function if exists public.test_fail_page() cascade"))
+        t = self.new_ticket()
+        result = self.commit(t, self.claim(t)["claim_token"], prio="URGENT")
+        self.assertEqual(result["result"], "COMMITTED_AUTO_ROUTED")
+        self.assertIn("injected", result["notification_error"])
+        row = c.execute("select * from public.ticket_safety_escalations where ticket_id=%s", (t,)).fetchone()
+        self.assertEqual((row["status"], row["attempts"]), ("FAILED", 1))
+        self.assertEqual(self.notifications(t, "AI_URGENT"), [])
+        c.execute("drop trigger test_fail_page on public.notifications")
+        c.execute("update public.ticket_safety_escalations set next_attempt_at=now() where ticket_id=%s", (t,))
+        self.svc().execute("select public.retry_safety_escalations()")
+        self.assertEqual(len(self.notifications(t, "AI_URGENT")), 4)
+        self.assertEqual(c.execute("select status from public.ticket_safety_escalations where ticket_id=%s", (t,)).fetchone()["status"], "SENT")
 
     # ---- 5. manual request limits (F-4) --------------------------------------
 
@@ -466,6 +623,10 @@ class BackendWorkerEndToEndTests(unittest.TestCase):
     def test_parallel_workers_call_the_model_once_and_commit_once(self):
         from unittest.mock import patch
         t = self.new_ticket()
+        with harness.connect(self.uri) as c:
+            c.execute("insert into public.user_departments(user_id, department_id) "
+                      "select u.user_id,d.department_id from public.users u cross join public.departments d "
+                      "where u.email='it.staff@caldwell.edu' and d.name='Campus Safety' on conflict do nothing")
         self.routing._REF_CACHE = None
         calls = []
 
@@ -497,7 +658,7 @@ class BackendWorkerEndToEndTests(unittest.TestCase):
         finally:
             c.close()
         self.assertEqual(row["ai_routing_status"], "AUTO_ROUTED")
-        self.assertEqual(pages, 3)
+        self.assertEqual(pages, 4)
 
     def test_staff_transfer_while_model_runs_is_preserved_by_backend(self):
         from unittest.mock import patch
@@ -572,7 +733,9 @@ class _SqlAdmin:
                 types = dict(SIGNATURES[name])
                 keys = list(params)
                 args = ", ".join(f"{k} => %s::{types[k]}" for k in keys)
-                rows = admin._run(f"select public.{name}({args}) as r", [params[k] for k in keys])
+                from psycopg.types.json import Jsonb
+                rows = admin._run(f"select public.{name}({args}) as r",
+                                  [Jsonb(params[k]) if types[k]=="jsonb" else params[k] for k in keys])
                 return _Result(rows[0]["r"])
         return Call()
 

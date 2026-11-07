@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -32,6 +33,20 @@ class Settings(BaseSettings):
     # requester. Staff reclassification is limited by the cooldown only.
     ai_manual_cooldown_seconds: int = Field(default=60, ge=0)
     ai_requester_manual_limit: int = Field(default=3, ge=0)
+    # Batch 3: configuration cannot authorize paid vision or real-photo shadow use.
+    # Shadow execution requires an explicitly injected offline fixture provider.
+    vision_mode: Literal['disabled', 'shadow'] = 'disabled'
+    # Batch 4: opt-in fixture-only evidence tools, never used by routing.
+    knowledge_enabled: bool = False
+    observability_enabled: bool = False
+    observability_interval_seconds: float = Field(default=15, ge=5, le=30)
+    observability_exporter: Literal['memory', 'otlp-local'] = 'memory'
+    observability_otlp_endpoint: str = 'http://127.0.0.1:6006/v1/traces'
+
+    @property
+    def vision_paid_calls_enabled(self) -> bool:
+        return False
+
     # Email delivery of notifications. Leave SMTP_HOST blank to disable; the
     # in-app notifications work regardless.
     smtp_host: str = ""

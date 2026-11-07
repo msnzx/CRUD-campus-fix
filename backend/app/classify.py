@@ -88,8 +88,12 @@ def _classify_with_deepseek(
         method="POST",
     )
 
-    with urllib.request.urlopen(req, timeout=settings.ollama_timeout_seconds) as response:
-        data = json.loads(response.read().decode("utf-8"))
+    def send():
+        with urllib.request.urlopen(req, timeout=settings.ollama_timeout_seconds) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    from .observability.models import observed_model_call
+    data = observed_model_call(settings, "classification_model", prompt, send)
 
     content = data["message"]["content"].strip()
     match = re.search(r"\{.*\}", content, re.S)
@@ -139,7 +143,8 @@ def classify(ticket: dict, admin: Client, settings: Settings) -> Classification 
         # Any explicit review decision routes safely to Other / Review.
         if priority_name == "NEEDS_REVIEW" or issue_name == "Other":
             issue = issue_lookup.get("Other")
-            priority = priority_lookup.get("MEDIUM")
+            # Review is a routing decision, not permission to discard a hazard.
+            priority = priority_lookup.get("URGENT" if priority_name == "URGENT" else "MEDIUM")
             dept = _department_id(departments, "Other / Review")
             if not issue or not priority:
                 return None
@@ -183,8 +188,8 @@ def classify(ticket: dict, admin: Client, settings: Settings) -> Classification 
 
     except Exception as exc:
         log.warning(
-            "DeepSeek classification failed for ticket %s: %s",
+            "DeepSeek classification failed for ticket %s (%s)",
             ticket.get("ticket_id"),
-            exc,
+            type(exc).__name__,
         )
         return None

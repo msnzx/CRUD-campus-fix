@@ -1,0 +1,163 @@
+"""Synthetic fixtures for staff-correction provenance, active learning, and distillation."""
+from __future__ import annotations
+
+from typing import Any
+from .correction import build_correction
+
+FIXTURE_CASES: list[dict[str, Any]] = [
+    {
+        "ticket_id": 5001,
+        "ticket_revision": 1,
+        "report_text": "SYNTHETIC FIXTURE: Broken chair leg in the main library second floor study area.",
+        "ai_verdict": {
+            "model_id": "deepseek-r1:8b",
+            "analysis_id": "00000000-0000-0000-0000-000000005001",
+            "department": "Facilities",
+            "issue_type": "Furniture",
+            "priority": "LOW",
+            "confidence": 0.88,
+            "routed_at": "2026-11-06T12:00:00+00:00",
+        },
+        "staff_action": {
+            "staff_user_id": "staff-fac-01",
+            "staff_role": "DEPARTMENT_STAFF",
+            "department": "Facilities",
+            "issue_type": "Furniture",
+            "priority": "LOW",
+            "action_type": "RESOLVE",
+            "correction_reason": "POLICY_DISCRETION",
+            "staff_notes": "Replaced broken study chair.",
+            "corrected_at": "2026-11-06T12:30:00+00:00",
+        },
+    },
+    {
+        "ticket_id": 5002,
+        "ticket_revision": 1,
+        "report_text": "SYNTHETIC FIXTURE: Soda vending machine on second floor swallowed student card funds without dispensing drink.",
+        "ai_verdict": {
+            "model_id": "deepseek-r1:8b",
+            "analysis_id": "00000000-0000-0000-0000-000000005002",
+            "department": "Dining",
+            "issue_type": "Dining Service",
+            "priority": "LOW",
+            "confidence": 0.62,
+            "routed_at": "2026-11-06T13:00:00+00:00",
+        },
+        "staff_action": {
+            "staff_user_id": "staff-dining-02",
+            "staff_role": "DEPARTMENT_STAFF",
+            "department": "IT",
+            "issue_type": "Vending",
+            "priority": "LOW",
+            "action_type": "TRANSFER",
+            "correction_reason": "MISCLASSIFIED_DEPARTMENT",
+            "staff_notes": "Campus card vending readers are managed by IT Services, not Dining.",
+            "corrected_at": "2026-11-06T13:15:00+00:00",
+        },
+    },
+    {
+        "ticket_id": 5003,
+        "ticket_revision": 2,
+        "report_text": "SYNTHETIC FIXTURE: Kitchenette microwave in dorm lounge sparking with visible smoke smelling like burning plastic.",
+        "ai_verdict": {
+            "model_id": "deepseek-r1:8b",
+            "analysis_id": "00000000-0000-0000-0000-000000005003",
+            "department": "Facilities",
+            "issue_type": "Heating / Cooling",
+            "priority": "MEDIUM",
+            "confidence": 0.51,
+            "routed_at": "2026-11-06T14:00:00+00:00",
+        },
+        "staff_action": {
+            "staff_user_id": "staff-reslife-01",
+            "staff_role": "DEPARTMENT_ADMIN",
+            "department": "Facilities",
+            "issue_type": "Electrical",
+            "priority": "URGENT",
+            "action_type": "PRIORITY_OVERRIDE",
+            "correction_reason": "HAZARD_ESCALATION",
+            "staff_notes": "Immediate electrical hazard and smoke; unplugged appliance and requested priority inspection.",
+            "corrected_at": "2026-11-06T14:10:00+00:00",
+        },
+    },
+    {
+        "ticket_id": 5004,
+        "ticket_revision": 1,
+        "report_text": "SYNTHETIC FIXTURE: Ceiling water leak dripping directly above server rack in science hall telecom room.",
+        "ai_verdict": {
+            "model_id": "deepseek-r1:8b",
+            "analysis_id": "00000000-0000-0000-0000-000000005004",
+            "department": "Facilities",
+            "issue_type": "Plumbing",
+            "priority": "LOW",
+            "confidence": 0.58,
+            "routed_at": "2026-11-06T15:00:00+00:00",
+        },
+        "staff_action": {
+            "staff_user_id": "staff-it-03",
+            "staff_role": "DEPARTMENT_STAFF",
+            "department": "Facilities",
+            "issue_type": "Structural",
+            "priority": "HIGH",
+            "action_type": "PRIORITY_OVERRIDE",
+            "correction_reason": "HAZARD_ESCALATION",
+            "staff_notes": "Roof leak posing imminent risk of telecom server equipment failure.",
+            "corrected_at": "2026-11-06T15:20:00+00:00",
+        },
+    },
+    {
+        "ticket_id": 5005,
+        "ticket_revision": 1,
+        "report_text": "SYNTHETIC FIXTURE: Smart classroom projector HDMI cable severed and wall mounting plate loose.",
+        "ai_verdict": {
+            "model_id": "deepseek-r1:8b",
+            "analysis_id": "00000000-0000-0000-0000-000000005005",
+            "department": "IT",
+            "issue_type": "Classroom Technology",
+            "priority": "MEDIUM",
+            "confidence": 0.79,
+            "routed_at": "2026-11-06T16:00:00+00:00",
+        },
+        "staff_action": {
+            "staff_user_id": "staff-it-01",
+            "staff_role": "DEPARTMENT_STAFF",
+            "department": "Facilities",
+            "issue_type": "Structural",
+            "priority": "LOW",
+            "action_type": "TRANSFER",
+            "correction_reason": "ADMINISTRATIVE_LOAD_BALANCE",
+            "staff_notes": "Wall plate mounting requires facilities carpentry tools.",
+            "corrected_at": "2026-11-06T16:30:00+00:00",
+        },
+    },
+    {
+        "ticket_id": 5006,
+        "ticket_revision": 1,
+        "report_text": "SYNTHETIC FIXTURE: Perimeter fence tree branch hanging near overhead utility wire on town border.",
+        "ai_verdict": {
+            "model_id": "deepseek-r1:8b",
+            "analysis_id": "00000000-0000-0000-0000-000000005006",
+            "department": "Facilities",
+            "issue_type": "Structural",
+            "priority": "MEDIUM",
+            "confidence": 0.45,
+            "routed_at": "2026-11-06T17:00:00+00:00",
+        },
+        "staff_action": {
+            "staff_user_id": "staff-safety-01",
+            "staff_role": "DEPARTMENT_STAFF",
+            "department": "Campus Safety",
+            "issue_type": "Safety Hazard",
+            "priority": "MEDIUM",
+            "action_type": "TRANSFER",
+            "correction_reason": "POLICY_DISCRETION",
+            "staff_notes": "Unclear whether utility wire is university or municipal responsibility.",
+            "corrected_at": "2026-11-06T17:15:00+00:00",
+        },
+    },
+]
+
+
+def load_synthetic_corrections() -> list[dict[str, Any]]:
+    """Build synthetic correction records with verified provenance."""
+    return [build_correction(**case) for case in FIXTURE_CASES]

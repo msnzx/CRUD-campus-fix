@@ -50,3 +50,7 @@ backend/archive/
 # Fresh evaluation runs are not part of the frozen benchmark
 evaluation/evaluation_results_holdout/
 evaluation/runs/
+
+# Real reports, pseudonymization inputs, labels, sealed tests and experiment outputs.
+# Ignore even reviewed/de-identified research data; metadata alone can be sensitive.
+.campusfix-private/

@@ -126,6 +126,9 @@ class Database:
         if ticket is None:
             return {"claimed": False, "ok": False, "allowed": False, "reason": "not_found", "result": "NOT_FOUND"}
         job = self._job(ticket["ticket_id"])
+        if name == "ai_commit_enrichment":
+            self._patch(ticket, params["p_text"])
+            return True
         if name == "ai_claim_ticket":
             allowed = ("PENDING", "FAILED") if params["p_allow_failed"] else ("PENDING",)
             if ticket.get("deleted_at"):
@@ -173,7 +176,8 @@ class Database:
                 update.update(department_id=params["p_department_id"], priority_id=params["p_priority_id"],
                               status_id=self._status("ASSIGNED"))
             self._patch(ticket, update)
-            return {"result": "COMMITTED_AUTO_ROUTED", "outcome": outcome, "urgent_notifications": 0}
+            return {"result": "COMMITTED_AUTO_ROUTED", "outcome": outcome, "urgent_notifications": 0,
+                    "analysis_id": params["p_claim_token"], "enrichment_revision": 1}
         if name == "ai_release_claim":
             released = job["token"] == params["p_claim_token"]
             if released:
@@ -331,6 +335,7 @@ class EnrichmentTests(unittest.TestCase):
         return enrich.enrich_ticket(
             ticket if ticket is not None else self.db.ticket, self.db.client,
             issue_type_id=11, priority_id=2, settings=self.cfg,
+            analysis_token="test-token", expected_revision=1,
         )
 
     def test_preserves_original_text_exactly_and_only_updates_text_fields(self):
@@ -582,34 +587,18 @@ class RoutingAPITests(unittest.TestCase):
 
 class PendingClassificationTests(unittest.IsolatedAsyncioTestCase):
     async def test_recovery_loop_processes_queued_pending_tickets(self):
-        admin = MagicMock()
-        query = admin.table.return_value
-        query.select.return_value = query
-        query.eq.return_value = query
-        query.is_.return_value = query
-        query.lt.return_value = query
-        query.order.return_value = query
-        query.limit.return_value = query
-        query.execute.return_value.data = [{"ticket_id": 334}]
         cfg = config()
-
-        with (
-            patch("app.main.create_client", return_value=admin) as create_admin,
-            patch("app.main._classify_pending_ticket") as process,
-            patch(
-                "app.main.asyncio.sleep",
-                new=AsyncMock(side_effect=[None, asyncio.CancelledError]),
-            ),
-        ):
+        admin = MagicMock()
+        claimed = {"claimed": True, "claim_token": "t", "ticket": {"ticket_id": 334}}
+        with patch.object(main, "create_client", return_value=admin), \
+             patch.object(main.ai_jobs, "claim_next", side_effect=[claimed, {"claimed": False,"reason": "empty"}]) as claim, \
+             patch.object(main, "_run_claimed_ticket", return_value=main.ClassifyResult(
+                 ticket_id=334,routing_status="AUTO_ROUTED",detail="done")) as process, \
+             patch.object(main.asyncio,"sleep",new=AsyncMock(side_effect=[None,asyncio.CancelledError()])):
             with self.assertRaises(asyncio.CancelledError):
                 await main.classification_loop(cfg)
-
-        create_admin.assert_called_once_with(cfg.supabase_url, cfg.supabase_service_role_key)
-        query.eq.assert_called_once_with("ai_routing_status", "PENDING")
-        query.is_.assert_called_once_with("deleted_at", "null")
-        query.order.assert_called_once_with("created_at", desc=True)
-        query.limit.assert_called_once_with(main.CLASSIFICATION_BATCH_SIZE)
-        process.assert_called_once_with(334, admin, cfg)
+        self.assertEqual(claim.call_count,2)
+        process.assert_called_once_with(claimed,admin,cfg)
 
 
 class ManualRequestLimitTests(unittest.TestCase):

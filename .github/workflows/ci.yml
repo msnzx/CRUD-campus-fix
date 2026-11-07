@@ -1,5 +1,8 @@
 name: CI
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
@@ -53,7 +56,11 @@ jobs:
           retention-days: 7
 
   backend:
-    name: Backend — import & smoke test
+    name: Backend Python ${{ matrix.python }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12']
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -64,19 +71,43 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ matrix.python }}
           cache: pip
           cache-dependency-path: |
             backend/requirements.txt
             backend/requirements.lock.txt
 
-      - run: pip install -r requirements.txt -c requirements.lock.txt
+      - run: pip install -r requirements.txt -r requirements.lock.txt
 
       - name: Compile all modules
         run: python -m compileall -q app
 
       - name: Routing regression tests
         run: python -m unittest discover -s tests -v
+
+      - name: Batch 2 offline data and evaluation protocol
+        working-directory: .
+        run: python -m unittest discover -s experiments/batch2/tests -v
+
+      - name: Batch 3 vision offline regressions
+        run: python -m unittest discover -s tests -p test_vision.py -v
+
+      - name: Batch 4 retrieval offline regressions
+        run: python -m unittest discover -s tests -p test_knowledge.py -v
+
+      - name: Locked dependency integrity
+        working-directory: .
+        run: |
+          python -m pip check
+          python -m experiments.batch6.dependencies
+
+      - name: Batch 5 active learning and distillation experiment protocol
+        working-directory: .
+        run: python -m unittest discover -s experiments/batch5/tests -v
+
+      - name: Batch 6 offline observability security and regression tests
+        working-directory: .
+        run: python -m unittest discover -s experiments/batch6/tests -v
 
       - name: Frozen benchmark integrity and offline metrics
         run: |
@@ -114,6 +145,29 @@ jobs:
           print('backend smoke test passed')
           PY
 
+  database:
+    name: Throwaway PostgreSQL regressions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install locked runtime and database test tools
+        run: |
+          pip install -r backend/requirements.txt -r backend/requirements.lock.txt
+          pip install -r supabase/tests/local/requirements.txt -c backend/requirements.lock.txt
+          pip check
+      - name: Require native database tools and run all database regressions
+        run: |
+          python -c "import pgserver, psycopg"
+          python - <<'PY'
+          import sys, unittest
+          suite = unittest.defaultTestLoader.discover('supabase/tests/local')
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          sys.exit(not result.wasSuccessful() or bool(result.skipped))
+          PY
+
   secrets:
     name: Secret scan
     runs-on: ubuntu-latest
@@ -128,12 +182,8 @@ jobs:
           fi
           echo "No tracked .env files."
 
-      - name: Fail on a service_role key
-        run: |
-          # A service_role JWT carries that literal claim in its payload and
-          # bypasses RLS entirely. It must never reach the repository.
-          if git grep -I -n -E '"role"\s*:\s*"service_role"' -- . ':!.github'; then
-            echo "::error::A service_role key appears to be committed. Rotate it immediately."
-            exit 1
-          fi
-          echo "No service_role key found."
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Scan tracked files for private keys and encoded service-role credentials
+        run: python -m experiments.batch6.security_scan

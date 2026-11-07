@@ -1,0 +1,161 @@
+{
+  "version": "3.0.0-proposed-batch2.1",
+  "status": "PROPOSED",
+  "approved_by": null,
+  "approval_ref": null,
+  "contract": {
+    "label_fields": [
+      "issue_type",
+      "department",
+      "priority",
+      "action",
+      "safety_escalation",
+      "review_reason"
+    ],
+    "priority": "LOW|MEDIUM|HIGH|URGENT|null",
+    "action": "AUTO_ROUTE|NEEDS_REVIEW",
+    "safety": "URGENT findings escalate independently of routing; uncertain labels require human adjudication",
+    "production_changed": false
+  },
+  "prior_proposal_sha256": "3ce6c4cb17d228195bbdebcbd3292f9da8c932843c88c88ff595d888c75e30ef",
+  "decisions": {
+    "U-01": {
+      "question": "Does \"time-sensitive\" without a stated window count as an imminent deadline under D1?",
+      "status": "PENDING",
+      "resolution": null,
+      "approval_ref": null
+    },
+    "U-02": {
+      "question": "Does \"shortly before a hard deadline closes\" count as imminent?",
+      "status": "PENDING",
+      "resolution": null,
+      "approval_ref": null
+    },
+    "U-03": {
+      "question": "\"All printers are down…\" has no stated scope. Keep HIGH, or read it as campus-wide?",
+      "status": "PENDING",
+      "resolution": null,
+      "approval_ref": null
+    },
+    "U-04": {
+      "question": "Is every stairwell an emergency-egress route, and does \"most lights failed, poor visibility\" meet D8's \"materially unsafe\"?",
+      "status": "PENDING",
+      "resolution": null,
+      "approval_ref": null
+    },
+    "U-05": {
+      "question": "An entrance that cannot be secured at closing, with no time given: HIGH or URGENT?",
+      "status": "PENDING",
+      "resolution": null,
+      "approval_ref": null
+    },
+    "U-06": {
+      "question": "\"Unsafe\" with no described threat (R-SAF-4): HIGH plus welfare check, or URGENT?",
+      "status": "PENDING",
+      "resolution": null,
+      "approval_ref": null
+    },
+    "U-07": {
+      "question": "Is repeated loss on a single machine \"material impact\" under D5?",
+      "status": "PENDING",
+      "resolution": null,
+      "approval_ref": null
+    },
+    "U-08": {
+      "question": "**D5 side effects outside the 30 flagged cases** (found by lint).",
+      "status": "PENDING",
+      "resolution": null,
+      "approval_ref": null
+    },
+    "U-09": {
+      "question": "Issue type for threats: dangerous found item; stolen ID in active use.",
+      "status": "PENDING",
+      "resolution": null,
+      "approval_ref": null
+    },
+    "U-10": {
+      "question": "Dual-valid issue types: obstructing vehicle (Parking vs Safety Hazard); refund question (Financial Aid vs Billing). Adopt an optional `alternate_issue_types` scoring field?",
+      "status": "PENDING",
+      "resolution": null,
+      "approval_ref": null
+    },
+    "U-11": {
+      "question": "D6 representation: keep the equipment issue type with a Facilities override, or relabel the issue as Electrical? Should visible smoke go to Campus Safety instead of Facilities?",
+      "status": "PENDING",
+      "resolution": null,
+      "approval_ref": null
+    },
+    "U-12": {
+      "question": "D7 conflicts with production, which rewrites every review decision to `Other / Other / Review`. Change production (separate review), or score the category leniently?",
+      "status": "PENDING",
+      "resolution": null,
+      "approval_ref": null
+    },
+    "U-13": {
+      "question": "D2 action vocabulary and follow-up: is `AUTO_ROUTE + safety_escalation` sufficient, or add an `ESCALATE` action? How is the secondary issue scored and ticketed?",
+      "status": "PENDING",
+      "resolution": null,
+      "approval_ref": null
+    },
+    "U-14": {
+      "question": "Does D9 apply to a *planned* outage of the only accessible route?",
+      "status": "PENDING",
+      "resolution": null,
+      "approval_ref": null
+    },
+    "U-15": {
+      "question": "`safety_escalation` and `accessibility_escalation` are blank (not assessed) on the 157 rows outside this review. Is a labeling pass needed before v3, or is blank acceptable for v3.0?",
+      "status": "PENDING",
+      "resolution": null,
+      "approval_ref": null
+    },
+    "U-16": {
+      "question": "Confirm v3 is **development-only**, and that a new holdout will be written under policy v3.",
+      "status": "PENDING",
+      "resolution": null,
+      "approval_ref": null
+    },
+    "U-17": {
+      "question": "Evaluator compatibility: `analyze_development.py` is pinned to v2. Scoring old predictions against v3 changes the target, so results are not comparable with the v2 baseline.",
+      "status": "PENDING",
+      "resolution": null,
+      "approval_ref": null
+    },
+    "B2-01": {
+      "question": "Approve ordinal priority and routing action as independent label axes, including Other + URGENT + NEEDS_REVIEW; this changes the old draft schema, not current Batch 1 behavior.",
+      "status": "PENDING",
+      "resolution": null,
+      "approval_ref": null
+    },
+    "B2-02": {
+      "question": "Approve selective-error, urgent-recall, false-alert, sample-support and coverage release criteria before evaluation.",
+      "status": "PENDING",
+      "resolution": null,
+      "approval_ref": null
+    },
+    "B2-03": {
+      "question": "Approve collection authority, privacy review, retention, access controls and deletion handling for real reports.",
+      "status": "PENDING",
+      "resolution": null,
+      "approval_ref": null
+    },
+    "B2-04": {
+      "question": "Approve independent test custody, grouping, sampling population and one-shot final-test procedure.",
+      "status": "PENDING",
+      "resolution": null,
+      "approval_ref": null
+    },
+    "B2-05": {
+      "question": "Approve and measure a genuine candidate-specific confidence score source; existing runtime route flags are ineligible.",
+      "status": "PENDING",
+      "resolution": null,
+      "approval_ref": null
+    },
+    "B2-06": {
+      "question": "Approve the candidate budget, validation selection protocol and separate evidence-based production promotion process.",
+      "status": "PENDING",
+      "resolution": null,
+      "approval_ref": null
+    }
+  }
+}

@@ -54,6 +54,14 @@ def claim(admin: Client, ticket_id: int, cfg: Settings, *, allow_failed: bool = 
     })
 
 
+def claim_next(admin: Client, cfg: Settings) -> dict:
+    """Atomically claim oldest due work, including bounded failed-job retries."""
+    return _rpc(admin, "ai_claim_next_ticket", {
+        "p_worker": WORKER_ID, "p_lease_seconds": cfg.ai_lease_seconds,
+        "p_max_attempts": cfg.ai_max_attempts, "p_min_age_seconds": 5,
+    })
+
+
 def commit(
     admin: Client,
     ticket_id: int,

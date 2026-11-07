@@ -68,8 +68,12 @@ Rules:
         method="POST",
     )
 
-    with urllib.request.urlopen(req, timeout=settings.ollama_timeout_seconds) as response:
-        data = json.loads(response.read().decode("utf-8"))
+    def send():
+        with urllib.request.urlopen(req, timeout=settings.ollama_timeout_seconds) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    from .observability.models import observed_model_call
+    data = observed_model_call(settings, "enrichment_model", system, send)
 
     content = data["message"]["content"].strip()
     match = re.search(r"\{.*\}", content, re.S)
@@ -99,10 +103,15 @@ def enrich_ticket(
     issue_type_id: int | None,
     priority_id: int | None,
     settings: Settings | None = None,
+    analysis_token: str | None = None,
+    expected_revision: int | None = None,
 ) -> bool:
     """Polish one ticket after routing. Returns True on success, False on failure."""
 
     try:
+        # Only a versioned classification commit can authorize enrichment.
+        if analysis_token is None or expected_revision is None:
+            return False
         raw_title = str(ticket.get("title") or "").strip()
         raw_description = str(ticket.get("description") or "").strip()
 
@@ -152,16 +161,15 @@ def enrich_ticket(
             "ai_explanation": polished["explanation"],
         }
 
-        admin.table("tickets").update(update).eq(
-            "ticket_id", ticket["ticket_id"]
-        ).execute()
-
-        return True
+        return admin.rpc("ai_commit_enrichment", {
+            "p_ticket_id": ticket["ticket_id"], "p_analysis_token": analysis_token,
+            "p_expected_revision": expected_revision, "p_text": update,
+        }).execute().data is True
 
     except Exception as exc:
         log.warning(
-            "AI enrichment failed for ticket %s: %s",
+            "AI enrichment failed for ticket %s (%s)",
             ticket.get("ticket_id"),
-            exc,
+            type(exc).__name__,
         )
         return False

@@ -28,9 +28,9 @@ The ticket is committed at `NEW`. It transitions to `AI_PROCESSING` only when cl
 
 **Given** a user who owns a ticket
 
-**Then** they can view its details, status, history, public comments, and attachments.
+**Then** they can view its details, status, history, private chat messages, and attachments.
 
-They must **not** see comments where `is_internal = true`.
+They must **not** see any internal notes (`comments`, which are internal-only).
 
 ### V-003 — Prevent Cross-User Access
 
@@ -138,9 +138,9 @@ On resolve: `resolved_at` is populated, resolution notes are stored, the request
 
 **Given** a resolved ticket
 
-**When** the requester adds a comment
+**When** the requester sends a chat message (staff has already spoken)
 
-**Then** the comment is stored, the assigned staff member is notified, and the ticket status is **unchanged**. A comment never implicitly reopens a ticket.
+**Then** the message is stored, the assigned staff member is notified, and the ticket status is **unchanged**. A message never implicitly reopens a ticket. Once the ticket is CLOSED, sending is refused for both parties.
 
 ## 5. Data Verification
 
@@ -206,7 +206,8 @@ Every cell is a test. There are no optional cells.
 | Assign ticket | No | Yes | Yes | Yes |
 | Transfer department | No | **No** | Yes | Yes |
 | Change status | No | Yes | Yes | Yes |
-| Add public comment | Yes | Yes | Yes | Yes |
+| Send chat message (assignee, or requester after staff speaks) | Yes (own ticket) | Assignee only | Assignee only | Assignee only |
+| Add internal note | No | Yes | Yes | Yes |
 | Add internal note | No | Yes | Yes | Yes |
 | Read internal notes | No | Yes | Yes | Yes |
 | Resolve | No | Yes | Yes | Yes |

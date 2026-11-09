@@ -343,6 +343,22 @@ export type Database = {
           { foreignKeyName: 'ticket_history_changed_by_fkey'; columns: ['changed_by']; isOneToOne: false; referencedRelation: 'users'; referencedColumns: ['user_id'] },
         ]
       }
+      ticket_messages: {
+        Row: {
+          created_at: string
+          message: string
+          message_id: number
+          sender_id: string
+          ticket_id: number
+        }
+        // Written only through the send_ticket_message RPC (no INSERT grant).
+        Insert: never
+        Update: never
+        Relationships: [
+          { foreignKeyName: 'ticket_messages_ticket_id_fkey'; columns: ['ticket_id']; isOneToOne: false; referencedRelation: 'tickets'; referencedColumns: ['ticket_id'] },
+          { foreignKeyName: 'ticket_messages_sender_id_fkey'; columns: ['sender_id']; isOneToOne: false; referencedRelation: 'users'; referencedColumns: ['user_id'] },
+        ]
+      }
       ticket_reopen_requests: {
         Row: {
           decided_at: string | null
@@ -552,6 +568,26 @@ export type Database = {
       decide_reopen: {
         Args: { p_approve: boolean; p_note?: string; p_request_id: number }
         Returns: undefined
+      }
+      my_message_threads: {
+        Args: Record<PropertyKey, never>
+        Returns: {
+          ticket_id: number
+          title: string
+          status: string
+          reported_by: string
+          requester_name: string | null
+          assigned_to: string | null
+          role: 'REQUESTER' | 'ASSIGNEE' | 'OBSERVER'
+          last_message: string | null
+          last_sender: string | null
+          last_at: string | null
+          message_count: number
+        }[]
+      }
+      send_ticket_message: {
+        Args: { p_message: string; p_ticket_id: number }
+        Returns: number
       }
       set_department_member: {
         Args: { p_department_id: number; p_member: boolean; p_user_id: string }

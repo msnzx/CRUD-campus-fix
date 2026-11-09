@@ -94,7 +94,7 @@ As **fac.staff**:
 3. Open the ticket, **Claim** it. Status becomes Assigned and History records it.
    The requester gets a notification (bell in the header).
 4. **Move to In Progress**. Set a **Priority** from the dropdown.
-5. Add a public comment, then tick **Internal note** and add a second.
+5. Send the requester a message in **Messages**, then add an **Internal note**.
 6. **Resolve** with resolution notes.
 
 **Expect:** every step appends to History with an actor and a timestamp.
@@ -114,9 +114,10 @@ the `transfer_ticket` RPC refuses them if called directly.
 **Users** and also changes roles and deactivates accounts.
 
 **4b. Internal notes really are hidden (V-002).** Sign back in as **student2**
-and open the same ticket. The public comment is there; the internal note is
-not. It is filtered by RLS, not by CSS — check the network response if you
-want to be certain.
+and open the same ticket. The staff message is there and you can reply to it;
+the internal note is not. It is filtered by RLS, not by CSS — check the network
+response if you want to be certain. Before staff has messaged, the requester
+sees "Your assigned staff member will message you here first" and no composer.
 
 ---
 
@@ -136,8 +137,9 @@ As **student2**, on the resolved ticket:
 **fac.staff** does not see Approve/Deny. That is a DEPARTMENT_ADMIN action by
 design — `verification.md` §8.
 
-**5b. A comment does not reopen (V-026).** On a resolved ticket, comment as the
-requester. Status does not change; the placeholder text says so.
+**5b. A message does not reopen (V-026).** On a resolved ticket, reply in
+Messages as the requester. Status does not change. Once the ticket is Closed,
+the composer is replaced by "This ticket is closed. Messaging is disabled."
 
 **5c. Window expiry (V-025).**
 

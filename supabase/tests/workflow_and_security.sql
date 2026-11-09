@@ -185,6 +185,127 @@ begin
     'cannot move from RESOLVED to REOPENED');
 end $$;
 
+-- ---- Private chat and internal notes --------------------------------------
+-- State here: ticket is RESOLVED and assigned to fac.staff.
+
+do $$
+declare
+  v_ticket bigint := pg_temp.id('ticket');
+begin
+  perform pg_temp.act_as('student2@caldwell.edu');
+
+  perform pg_temp.expect_error('Requester cannot start the chat before staff speaks',
+    format($q$select public.send_ticket_message(%s, 'hello?')$q$, v_ticket),
+    'will message you here first');
+
+  perform pg_temp.expect_error('Messages cannot be inserted directly',
+    format($q$insert into public.ticket_messages (ticket_id, sender_id, message)
+              values (%s, '%s', 'sneaky')$q$, v_ticket, pg_temp.uid('student2@caldwell.edu')),
+    'permission denied');
+
+  perform pg_temp.expect_error('Requester cannot post a comment',
+    format($q$insert into public.comments (ticket_id, user_id, message)
+              values (%s, '%s', 'hi')$q$, v_ticket, pg_temp.uid('student2@caldwell.edu')),
+    'row-level security');
+end $$;
+
+do $$
+declare
+  v_ticket bigint := pg_temp.id('ticket');
+begin
+  perform pg_temp.act_as('fac.staff@caldwell.edu');
+
+  perform public.send_ticket_message(v_ticket, 'Hi, I am coming by tomorrow. Is 10am ok?');
+  perform pg_temp.check('Assignee can start the chat',
+    (select count(*) from public.ticket_messages where ticket_id = v_ticket) = 1);
+
+  perform pg_temp.expect_error('Staff cannot post a non-internal comment',
+    format($q$insert into public.comments (ticket_id, user_id, message, is_internal)
+              values (%s, '%s', 'public?', false)$q$, v_ticket, pg_temp.uid('fac.staff@caldwell.edu')),
+    'row-level security|check constraint');
+
+  insert into public.comments (ticket_id, user_id, message)
+  values (v_ticket, pg_temp.uid('fac.staff@caldwell.edu'), 'Valve looks corroded.');
+  perform pg_temp.check('Staff can add an internal note (defaults to internal)',
+    exists (select 1 from public.comments where ticket_id = v_ticket and is_internal));
+end $$;
+
+do $$
+declare
+  v_ticket bigint := pg_temp.id('ticket');
+begin
+  perform pg_temp.act_as('student2@caldwell.edu');
+
+  perform public.send_ticket_message(v_ticket, 'Yes, 10am works.');
+  perform pg_temp.check('Requester can reply after staff has spoken, and sees both messages',
+    (select count(*) from public.ticket_messages where ticket_id = v_ticket) = 2);
+
+  perform pg_temp.check('Requester cannot see internal notes',
+    not exists (select 1 from public.comments where ticket_id = v_ticket));
+
+  perform pg_temp.check('Requester was notified of the staff message',
+    exists (select 1 from public.notifications
+            where ticket_id = v_ticket and type = 'MESSAGE'));
+end $$;
+
+do $$
+declare
+  v_ticket bigint := pg_temp.id('ticket');
+begin
+  perform pg_temp.act_as('fac.staff@caldwell.edu');
+  perform pg_temp.check('Assignee was notified of the requester reply',
+    exists (select 1 from public.notifications
+            where ticket_id = v_ticket and type = 'MESSAGE'));
+
+  -- A staff member in another department sees and sends nothing.
+  perform pg_temp.act_as('it.staff@caldwell.edu');
+  perform pg_temp.check('Staff outside the department cannot read the chat',
+    not exists (select 1 from public.ticket_messages where ticket_id = v_ticket));
+  perform pg_temp.expect_error('Staff outside the department cannot send',
+    format($q$select public.send_ticket_message(%s, 'let me in')$q$, v_ticket),
+    'ticket not found');
+
+  -- Department admin can audit the chat but not post.
+  perform pg_temp.act_as('fac.admin@caldwell.edu');
+  perform pg_temp.check('Department admin can read the chat',
+    (select count(*) from public.ticket_messages where ticket_id = v_ticket) = 2);
+  perform pg_temp.expect_error('Department admin cannot send unless assigned',
+    format($q$select public.send_ticket_message(%s, 'admin here')$q$, v_ticket),
+    'only the assigned staff member');
+  perform pg_temp.check('Department admin can read internal notes',
+    exists (select 1 from public.comments where ticket_id = v_ticket));
+end $$;
+
+-- Messages page list: each role sees only the threads it may open.
+do $$
+declare
+  v_ticket bigint := pg_temp.id('ticket');
+begin
+  perform pg_temp.act_as('student2@caldwell.edu');
+  perform pg_temp.check('Messages list: requester sees their thread as REQUESTER',
+    exists (select 1 from public.my_message_threads()
+            where ticket_id = v_ticket and role = 'REQUESTER' and message_count = 2));
+
+  perform pg_temp.act_as('it.staff@caldwell.edu');
+  perform pg_temp.check('Messages list: other department sees nothing of it',
+    not exists (select 1 from public.my_message_threads() where ticket_id = v_ticket));
+
+  perform pg_temp.act_as('fac.admin@caldwell.edu');
+  perform pg_temp.check('Messages list: department admin sees it as OBSERVER',
+    exists (select 1 from public.my_message_threads()
+            where ticket_id = v_ticket and role = 'OBSERVER'));
+end $$;
+
+do $$
+begin
+  reset role;
+  perform set_config('request.jwt.claims', '{"role":"anon"}', true);
+  set local role anon;
+  perform pg_temp.expect_error('Anonymous users cannot read messages',
+    'select count(*) from public.ticket_messages', 'permission denied');
+  reset role;
+end $$;
+
 -- ---- Requester asks to reopen ---------------------------------------------
 
 do $$
@@ -289,6 +410,30 @@ begin
   perform private.close_expired_resolved_tickets();
   perform pg_temp.check('Resolved tickets close automatically after 7 days',
                         pg_temp.status_of(v_ticket) = 'CLOSED', pg_temp.status_of(v_ticket));
+end $$;
+
+-- ---- Chat ends with the ticket; a new ticket starts a fresh chat ------------
+
+do $$
+declare
+  v_new bigint;
+begin
+  perform pg_temp.act_as('student2@caldwell.edu');
+
+  perform pg_temp.expect_error('Nobody can message on a closed ticket',
+    format($q$select public.send_ticket_message(%s, 'one more thing')$q$, pg_temp.id('ticket')),
+    'closed');
+
+  insert into public.tickets (reported_by, original_text, title, issue_type_id)
+  values (pg_temp.uid('student2@caldwell.edu'), 'A second, unrelated problem.',
+          'Test second ticket', pg_temp.id('fac_issue'))
+  returning ticket_id into v_new;
+
+  perform pg_temp.check('A new ticket starts with an empty chat',
+    not exists (select 1 from public.ticket_messages where ticket_id = v_new));
+  perform pg_temp.expect_error('A new unassigned ticket has no chat yet',
+    format($q$select public.send_ticket_message(%s, 'anyone?')$q$, v_new),
+    'once the ticket is assigned');
 end $$;
 
 reset role;

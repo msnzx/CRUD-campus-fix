@@ -22,6 +22,7 @@ import type { Tables } from '../lib/database.types'
 import { uploadAttachment, validateImage } from '../lib/attachments'
 import { startPendingTicketPolling } from '../lib/ticketPolling'
 import { TicketAiDetails } from '../components/TicketAiDetails'
+import { TicketChat } from '../components/TicketChat'
 
 interface CommentRow extends Tables<'comments'> {
   users: { first_name: string; last_name: string } | null
@@ -56,6 +57,7 @@ export default function TicketDetailPage() {
   const [signedUrls, setSignedUrls] = useState<Record<number, string>>({})
   const [reopenReq, setReopenReq] = useState<Tables<'ticket_reopen_requests'> | null>(null)
   const [assignee, setAssignee] = useState<Person | null>(null)
+  const [assigneeId, setAssigneeId] = useState<string | null>(null)
   const [deptStaff, setDeptStaff] = useState<Person[]>([])
 
   const [pollingExpired, setPollingExpired] = useState(false)
@@ -65,7 +67,6 @@ export default function TicketDetailPage() {
   const [busy, setBusy] = useState(false)
 
   const [draft, setDraft] = useState('')
-  const [internal, setInternal] = useState(false)
   const [resolution, setResolution] = useState('')
   const [showResolve, setShowResolve] = useState(false)
   const [showReopen, setShowReopen] = useState(false)
@@ -97,6 +98,7 @@ export default function TicketDetailPage() {
     setTicket((current) => current?.ticket_id === t.ticket_id ? latestTicket(current, t) : t)
 
     const [c, h, a, r, asg] = await Promise.all([
+      // Internal notes: RLS returns rows to department staff only.
       supabase
         .from('comments')
         .select('*, users(first_name, last_name)')
@@ -117,7 +119,7 @@ export default function TicketDetailPage() {
         .maybeSingle(),
       supabase
         .from('ticket_assignments')
-        .select('users!ticket_assignments_assigned_to_fkey(user_id, first_name, last_name)')
+        .select('assigned_to, users!ticket_assignments_assigned_to_fkey(user_id, first_name, last_name)')
         .eq('ticket_id', ticketId)
         .is('unassigned_at', null)
         .maybeSingle(),
@@ -127,6 +129,9 @@ export default function TicketDetailPage() {
     setHistory((h.data ?? []) as HistoryRow[])
     setAttachments(a.data ?? [])
     setReopenReq(r.data ?? null)
+    // A requester cannot read staff profiles (RLS), so `users` can be null even
+    // when someone is assigned. The assignment row itself is readable.
+    setAssigneeId(asg.data?.assigned_to ?? null)
     setAssignee((asg.data?.users as unknown as Person | null) ?? null)
 
     // Attachments live in a private bucket. Mint a short-lived signed URL
@@ -241,6 +246,11 @@ export default function TicketDetailPage() {
   const canTransfer = isStaff && isOpen && (isAdmin || ticket?.department_id == null)
   const lastDenial = history.find((h) => h.action === 'REOPEN_DENIED')
 
+  // Private chat (see components/TicketChat). The send_ticket_message RPC is
+  // authoritative; this only decides whether to show the card.
+  const isAssignee = !!assigneeId && assigneeId === profile?.user_id
+  const showMessages = isOwner || isAssignee || (isStaff && isAdmin)
+
   // Supabase query builders are thenable but are not real Promises, so the
   // callback is typed as PromiseLike rather than Promise.
   async function run(fn: () => PromiseLike<unknown> | unknown) {
@@ -266,7 +276,7 @@ export default function TicketDetailPage() {
         ticket_id: ticketId,
         user_id: profile.user_id,
         message: draft.trim(),
-        is_internal: internal,
+        is_internal: true,
       })
       setDraft('')
       return res
@@ -661,57 +671,64 @@ export default function TicketDetailPage() {
         )}
         {isOwner && statusName === STATUS.RESOLVED && !canReopen && reopenReq?.decision !== 'PENDING' && (
           <div className="hint">
-            The {REOPEN_WINDOW_DAYS}-day reopen window has closed. Add a comment instead, or
-            file a new ticket.
+            The {REOPEN_WINDOW_DAYS}-day reopen window has closed. File a new ticket if the
+            problem is still happening.
           </div>
         )}
       </div>
 
-      {/* ---- comments ---- */}
-      <div className="card">
-        <h3>Comments</h3>
-        {comments.length === 0 && <p className="muted small">No comments yet.</p>}
-        {comments.map((c) => (
-          <div key={c.comment_id} className={`comment ${c.is_internal ? 'internal' : ''}`}>
-            <div className="head">
-              {c.users ? `${c.users.first_name} ${c.users.last_name}` : 'Unknown'} ·{' '}
-              {formatRelative(c.created_at)}
-              {c.is_internal && <> · <strong>Internal note</strong></>}
-            </div>
-            <div style={{ whiteSpace: 'pre-wrap' }}>{c.message}</div>
-          </div>
-        ))}
-
-        <div className="field" style={{ marginTop: '0.75rem' }}>
-          <label htmlFor="comment">Add a comment</label>
-          <textarea
-            id="comment"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder={
-              statusName === STATUS.RESOLVED && isOwner
-                ? 'A comment will not reopen this ticket. Use Request reopen for that.'
-                : 'Add detail, ask a question, or share an update.'
-            }
+      {/* ---- private chat: requester <-> assigned staff ---- */}
+      {showMessages && (
+        <div className="card">
+          <h3>Messages</h3>
+          <p className="muted small" style={{ marginTop: 0 }}>
+            {isOwner
+              ? 'A private conversation with the staff member handling your ticket.'
+              : 'Private conversation with the requester.'}
+          </p>
+          <TicketChat
+            ticketId={ticket.ticket_id}
+            requesterId={ticket.reported_by}
+            assigneeId={assigneeId}
+            closed={statusName === STATUS.CLOSED}
           />
         </div>
-        <div className="actions">
-          <button className="primary" disabled={busy || !draft.trim()} onClick={() => void addComment()}>
-            Post
-          </button>
-          {isStaff && (
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', margin: 0, fontWeight: 400 }}>
-              <input
-                type="checkbox"
-                checked={internal}
-                onChange={(e) => setInternal(e.target.checked)}
-                style={{ width: 'auto' }}
-              />
-              Internal note (hidden from requester)
-            </label>
-          )}
+      )}
+
+      {/* ---- internal notes: staff only ---- */}
+      {isStaff && (
+        <div className="card">
+          <h3>Internal notes</h3>
+          <p className="muted small" style={{ marginTop: 0 }}>
+            Visible to department staff and admins only. The requester never sees these.
+          </p>
+          {comments.length === 0 && <p className="muted small">No internal notes yet.</p>}
+          {comments.map((c) => (
+            <div key={c.comment_id} className="comment internal">
+              <div className="head">
+                {c.users ? `${c.users.first_name} ${c.users.last_name}` : 'Unknown'} ·{' '}
+                {formatRelative(c.created_at)}
+              </div>
+              <div style={{ whiteSpace: 'pre-wrap' }}>{c.message}</div>
+            </div>
+          ))}
+
+          <div className="field" style={{ marginTop: '0.75rem' }}>
+            <label htmlFor="comment">Add an internal note</label>
+            <textarea
+              id="comment"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder="Hand-off context, findings, or anything the team should know."
+            />
+          </div>
+          <div className="actions">
+            <button className="primary" disabled={busy || !draft.trim()} onClick={() => void addComment()}>
+              Add note
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* ---- history ---- */}
       <div className="card">

@@ -132,7 +132,10 @@ Each ticket has exactly one primary department. Departments are deactivated (`ac
 
 ## 10. Comments and Notes
 
-Users and staff can comment. `comments.is_internal` marks staff-only operational notes, which are hidden from the requester by RLS rather than by frontend filtering.
+There are two separate channels, both enforced by RLS and RPCs rather than frontend filtering:
+
+- **Private chat** (`ticket_messages`): once a ticket is assigned, the assigned staff member can message the requester; after staff speaks, the requester can reply. One thread per ticket, so reassignment keeps history. Department and system admins can read it but not post. Messaging stops when the ticket is CLOSED, and a new ticket starts a fresh chat.
+- **Internal notes** (`comments`): visible only to department staff and admins. The requester never sees them.
 
 ## 11. Attachments
 
@@ -154,7 +157,7 @@ Users and staff can comment. `comments.is_internal` marks staff-only operational
 
 ### Post-resolution replies
 
-A comment added by the requester after resolution **remains a comment** and does not implicitly reopen the ticket. It notifies the assigned staff member. Reopening requires the explicit Reopen action. This keeps "I have a follow-up question" distinct from "this was not fixed."
+A chat message from the requester after resolution **remains a message** and does not implicitly reopen the ticket. It notifies the assigned staff member. Messaging is available until the ticket is CLOSED. Reopening requires the explicit Reopen action. This keeps "I have a follow-up question" distinct from "this was not fixed."
 
 ## 13. Emergency Handling
 

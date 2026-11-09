@@ -32,6 +32,7 @@ SUBJECTS = {
     "STATUS_CHANGED": "CampusFix: your ticket status changed",
     "ASSIGNED": "CampusFix: a ticket was assigned to you",
     "COMMENT": "CampusFix: new comment on a ticket",
+    "MESSAGE": "CampusFix: new message on your ticket",
     "REOPEN_REQUESTED": "CampusFix: reopen request needs a decision",
     "REOPEN_DENIED": "CampusFix: your reopen request was declined",
     "EMERGENCY": "CampusFix: EMERGENCY ticket reported",

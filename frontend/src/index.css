@@ -442,6 +442,33 @@ button.sm { padding: 0.3rem 0.6rem; font-size: 0.82rem; }
 
 .comment { padding: 0.7rem 0.9rem; border-radius: 10px; background: var(--surface-2); margin-bottom: 0.6rem; }
 .comment.internal { background: var(--warn-bg); }
+.chat-log { max-height: 60vh; overflow-y: auto; }
+
+/* Messages page: conversation list on the left, open chat on the right. */
+.messages-layout { display: grid; grid-template-columns: minmax(260px, 340px) 1fr; gap: 1rem; align-items: start; }
+.messages-list { margin: 0; padding: 0.75rem; }
+.messages-list ul { list-style: none; margin: 0.6rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; max-height: 70vh; overflow-y: auto; }
+.messages-list .thread {
+  display: block; width: 100%; text-align: left; padding: 0.6rem 0.7rem; border-radius: 10px;
+  background: var(--surface-2); border: 1px solid transparent; font: inherit; color: inherit; cursor: pointer;
+}
+.messages-list .thread:hover { border-color: var(--border, currentColor); }
+.messages-list .thread.selected { border-color: var(--accent, currentColor); }
+.thread-top { display: flex; justify-content: space-between; gap: 0.5rem; }
+.thread-preview { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin: 0.15rem 0 0.35rem; }
+.thread-meta { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+.messages-pane { margin: 0; min-height: 50vh; }
+.messages-pane-head { margin-bottom: 0.75rem; }
+.back-to-list { display: none; margin-bottom: 0.5rem; }
+@media (max-width: 720px) {
+  .messages-layout { grid-template-columns: 1fr; }
+  .messages-layout.has-selection .messages-list { display: none; }
+  .messages-layout:not(.has-selection) .messages-pane { display: none; }
+  .back-to-list { display: inline-block; }
+}
+
+.comment.chat { max-width: 85%; }
+.comment.chat.mine { margin-left: auto; background: var(--accent-bg, var(--surface-2)); }
 .comment .head { font-size: 0.8rem; color: var(--text-dim); margin-bottom: 0.25rem; }
 
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }

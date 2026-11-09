@@ -35,7 +35,8 @@ export default function NotificationsPage() {
         .eq('notification_id', n.notification_id)
       notifyUnreadChanged()
     }
-    if (n.ticket_id) nav(`/tickets/${n.ticket_id}`)
+    // Chat messages open the conversation, everything else the ticket.
+    if (n.ticket_id) nav(n.type === 'MESSAGE' ? `/messages/${n.ticket_id}` : `/tickets/${n.ticket_id}`)
     else void load()
   }
 

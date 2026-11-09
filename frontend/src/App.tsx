@@ -7,6 +7,7 @@ import CoverPage from './pages/CoverPage'
 import SubmitTicketPage from './pages/SubmitTicketPage'
 import MyTicketsPage from './pages/MyTicketsPage'
 import TicketDetailPage from './pages/TicketDetailPage'
+import MessagesPage from './pages/MessagesPage'
 import StaffQueuePage from './pages/StaffQueuePage'
 import AnalyticsPage from './pages/AnalyticsPage'
 import CampusMapPage from './pages/CampusMapPage'
@@ -69,6 +70,7 @@ function Chrome({ children }: { children: ReactNode }) {
         <nav className="nav">
           <NavLink to="/submit">Report an issue</NavLink>
           <NavLink to="/tickets">My tickets</NavLink>
+          <NavLink to="/messages">Messages</NavLink>
           {isStaff && <NavLink to="/queue">Queue</NavLink>}
           {isStaff && <NavLink to="/map">Map</NavLink>}
           {isStaff && <NavLink to="/analytics">Analytics</NavLink>}
@@ -125,6 +127,22 @@ export default function App() {
           element={
             <RequireAuth>
               <TicketDetailPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/messages"
+          element={
+            <RequireAuth>
+              <MessagesPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/messages/:id"
+          element={
+            <RequireAuth>
+              <MessagesPage />
             </RequireAuth>
           }
         />

@@ -4,6 +4,7 @@ import { BrowserRouter } from 'react-router-dom'
 import { AuthProvider } from './auth/AuthProvider'
 import App from './App'
 import { prefetchLookups } from './lib/useLookups'
+import 'leaflet/dist/leaflet.css'
 import './index.css'
 
 // Warm the reference-data cache while Supabase Auth is still resolving the

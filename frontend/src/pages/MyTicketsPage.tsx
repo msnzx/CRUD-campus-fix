@@ -50,25 +50,32 @@ export default function MyTicketsPage() {
   if (error) return <div className="content"><ErrorNote error={error} /></div>
   if (!tickets || !ready) return <Loading />
 
+  const openCount = tickets.filter((t) => {
+    const name = statusNameById(lookups, t.status_id)
+    return !!name && OPEN_STATUSES.includes(name)
+  }).length
+  const resolvedCount = tickets.length - openCount
+
   return (
-    <div className="content">
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: '1rem',
-          marginBottom: '1rem',
-        }}
-      >
-        <h1 style={{ margin: 0 }}>My tickets</h1>
-        <Link to="/submit">
-          <button className="primary">Report an issue</button>
-        </Link>
-      </div>
+    <div className="content student-dashboard">
+      <section className="dashboard-hero">
+        <div>
+          <p className="eyebrow">Student workspace</p>
+          <h1>Keep campus moving.</h1>
+          <p>Report an issue, follow the response, and see exactly what happens next.</p>
+        </div>
+        <Link className="primary dashboard-cta" to="/submit"><span aria-hidden="true">＋</span> Report an issue</Link>
+      </section>
+
+      <section className="ticket-summary" aria-label="Your ticket summary">
+        <div className="summary-card"><span className="summary-icon" aria-hidden="true">◌</span><div><strong>{tickets.length}</strong><span>Total reports</span></div></div>
+        <div className="summary-card"><span className="summary-icon warm" aria-hidden="true">↗</span><div><strong>{openCount}</strong><span>In progress</span></div></div>
+        <div className="summary-card"><span className="summary-icon good" aria-hidden="true">✓</span><div><strong>{resolvedCount}</strong><span>Resolved</span></div></div>
+      </section>
 
       {tickets.length > 0 && (
-        <div className="card card-tight">
+        <div className="card card-tight ticket-controls">
+          <div className="section-label"><strong>Your reports</strong><span>Search or filter your activity</span></div>
           <div className="row">
             <div style={{ flex: '3 1 220px' }}>
               <label htmlFor="my-q">Search</label>
@@ -92,17 +99,14 @@ export default function MyTicketsPage() {
       )}
 
       {tickets.length === 0 ? (
-        <Empty
-          title="You haven't reported anything yet"
-          hint={<Link to="/submit">Report your first issue</Link>}
-        />
+        <div className="empty-state-card"><span aria-hidden="true">⌁</span><Empty title="You haven't reported anything yet" hint={<Link to="/submit">Report your first issue</Link>} /></div>
       ) : visible.length === 0 ? (
         <Empty title="No tickets match" hint="Try a different search or show all tickets." />
       ) : (
         visible.map((t) => {
           const status = statusNameById(lookups, t.status_id)
           return (
-            <Link key={t.ticket_id} to={`/tickets/${t.ticket_id}`} className="ticket-row">
+            <Link key={t.ticket_id} to={`/tickets/${t.ticket_id}`} className="ticket-row redesigned-ticket-row">
               <div className="title">
                 {t.is_emergency && <span className="badge danger">Emergency</span>}{' '}
                 #{t.ticket_id} · {t.title}

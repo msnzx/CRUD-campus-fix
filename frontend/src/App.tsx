@@ -15,6 +15,9 @@ import NotificationsPage from './pages/NotificationsPage'
 import ProfilePage from './pages/ProfilePage'
 import UsersPage from './pages/UsersPage'
 import NotificationBell from './components/NotificationBell'
+import ThemeToggle from './components/ThemeToggle'
+import PublicFooter from './components/PublicFooter'
+import AppPhotoBackdrop from './components/AppPhotoBackdrop'
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { session, loading } = useAuth()
@@ -45,6 +48,7 @@ function Chrome({ children }: { children: ReactNode }) {
 
   return (
     <div className="app">
+      <AppPhotoBackdrop />
       <header className="site-header">
         <div className="topbar">
           <Link to="/tickets" className="brand">
@@ -76,6 +80,10 @@ function Chrome({ children }: { children: ReactNode }) {
         </nav>
       </header>
       {children}
+      <div className="theme-floating">
+        <ThemeToggle />
+      </div>
+      <PublicFooter />
     </div>
   )
 }
@@ -88,15 +96,27 @@ export default function App() {
 
   // Reachable signed in or not: the reset link itself creates the session,
   // and the page explains an expired link when it doesn't.
-  if (pathname === '/reset-password') return <ResetPasswordPage />
+  if (pathname === '/reset-password') {
+    return (
+      <div className="public-shell">
+        <ResetPasswordPage />
+        <div className="theme-floating"><ThemeToggle /></div>
+        <PublicFooter />
+      </div>
+    )
+  }
 
   if (!session) {
     return (
-      <Routes>
-        <Route path="/" element={<CoverPage />} />
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+      <div className="public-shell">
+        <Routes>
+          <Route path="/" element={<CoverPage />} />
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+        <div className="theme-floating"><ThemeToggle /></div>
+        <PublicFooter />
+      </div>
     )
   }
 

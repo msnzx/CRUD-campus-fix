@@ -65,7 +65,10 @@ export default function LoginPage() {
 
   return (
     <div className="auth-page">
+      <div className="auth-ambient auth-ambient-one" aria-hidden="true" />
+      <div className="auth-ambient auth-ambient-two" aria-hidden="true" />
       <div className="auth-card">
+        <p className="auth-kicker">Caldwell University</p>
         <Link className="auth-logo" to="/" aria-label="Back to the CaldwellFix cover page" title="Back to home">
           <BrandMark size={64} />
         </Link>

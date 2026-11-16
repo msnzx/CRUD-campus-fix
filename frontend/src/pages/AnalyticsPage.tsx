@@ -221,8 +221,8 @@ export default function AnalyticsPage() {
 
   if (metrics.total === 0) {
     return (
-      <div className="content">
-        <h1>Analytics</h1>
+      <div className="content analytics-page">
+        <section className="operations-hero"><div><p className="eyebrow">Insights</p><h1>Campus health</h1><p>Track issue patterns as reports begin coming in.</p></div></section>
         <Empty
           title="No ticket data yet"
           hint="Metrics appear here once tickets exist. Submit one to see this populate."
@@ -232,11 +232,8 @@ export default function AnalyticsPage() {
   }
 
   return (
-    <div className="content">
-      <h1>Analytics</h1>
-      <p className="muted small">
-        Computed live from ticket and history data, filtered by your access level.
-      </p>
+    <div className="content analytics-page">
+      <section className="operations-hero"><div><p className="eyebrow">Insights</p><h1>Campus health</h1><p>Live trends and workload signals, filtered by your access level.</p></div><div className="queue-count"><strong>{metrics.open}</strong><span>open reports</span></div></section>
 
       <div className="stat-grid">
         <Stat value={metrics.total} label="Total tickets" />

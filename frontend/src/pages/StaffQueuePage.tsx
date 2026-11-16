@@ -141,11 +141,11 @@ export default function StaffQueuePage() {
   const buildingNames = lookups.buildings.map((b) => b.name)
 
   return (
-    <div className="content">
-      <h1>Department queue</h1>
-      <p className="muted small">
-        Showing {visible.length} of {tickets.length} tickets you have access to.
-      </p>
+    <div className="content operations-page">
+      <section className="operations-hero">
+        <div><p className="eyebrow">Team workspace</p><h1>Department queue</h1><p>Focus on what needs attention and keep every report moving.</p></div>
+        <div className="queue-count"><strong>{visible.length}</strong><span>items in view</span></div>
+      </section>
 
       {pendingReopen.size > 0 && assignFilter !== 'reopen' && (
         <div className="alert warn">
@@ -157,7 +157,8 @@ export default function StaffQueuePage() {
         </div>
       )}
 
-      <div className="card card-tight">
+      <div className="card card-tight queue-controls">
+        <div className="section-label"><strong>Find the right work</strong><span>{tickets.length} tickets available to your team</span></div>
         <div className="row" style={{ marginBottom: '0.6rem' }}>
           <div style={{ flex: '3 1 240px' }}>
             <label htmlFor="f-q">Search</label>
@@ -241,7 +242,7 @@ export default function StaffQueuePage() {
         <Empty title="Nothing matches these filters" hint="Try widening the status or department filter." />
       ) : (
         visible.map((t) => (
-          <Link key={t.ticket_id} to={`/tickets/${t.ticket_id}`} className="ticket-row">
+          <Link key={t.ticket_id} to={`/tickets/${t.ticket_id}`} className="ticket-row redesigned-ticket-row">
             <div className="title">
               {t.is_emergency && <span className="badge danger">Emergency</span>} #{t.ticket_id} · {t.title}
             </div>

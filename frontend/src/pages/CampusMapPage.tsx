@@ -32,6 +32,12 @@ export default function CampusMapPage() {
   const [hovered, setHovered] = useState<number | null>(null)
   const [placing, setPlacing] = useState<number | null>(null)
   const [saving, setSaving] = useState(false)
+  const [gpsSavingId, setGpsSavingId] = useState<number | null>(null)
+  const [gpsNotice, setGpsNotice] = useState<string | null>(null)
+  // Reversible map-viewer enhancement: presentation only; pin data and
+  // ticket queries below remain exactly as they were.
+  const [mapQuery, setMapQuery] = useState('')
+  const [mapZoom, setMapZoom] = useState(1)
 
   const imgRef = useRef<HTMLImageElement>(null)
 
@@ -96,6 +102,10 @@ export default function CampusMapPage() {
 
   const placed = pins.filter((p) => p.map_x != null && p.map_y != null)
   const unplaced = pins.filter((p) => p.map_x == null || p.map_y == null)
+  const mapMatches = useMemo(() => {
+    const query = mapQuery.trim().toLowerCase()
+    return query ? placed.filter((building) => building.name.toLowerCase().includes(query)) : []
+  }, [mapQuery, placed])
 
   const selectedTickets = useMemo(() => {
     if (selected == null) return []
@@ -122,6 +132,36 @@ export default function CampusMapPage() {
     await load()
   }
 
+  function calibrateBuildingGps(building: Tables<'buildings'>) {
+    if (!navigator.geolocation) {
+      setError(new Error('Location services are not available in this browser.'))
+      return
+    }
+    if (!window.confirm(`Use your current position to calibrate ${building.name}? Only do this while standing at that building.`)) return
+    setGpsSavingId(building.building_id)
+    setGpsNotice(null)
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const { error: updateError } = await supabase
+          .from('buildings')
+          .update({ latitude: position.coords.latitude, longitude: position.coords.longitude })
+          .eq('building_id', building.building_id)
+        setGpsSavingId(null)
+        if (updateError) {
+          setError(updateError)
+          return
+        }
+        setGpsNotice(`${building.name} GPS point saved. Student location can now match this building.`)
+        await load()
+      },
+      () => {
+        setGpsSavingId(null)
+        setError(new Error('We could not access your current location.'))
+      },
+      { enableHighAccuracy: true, timeout: 10_000, maximumAge: 0 },
+    )
+  }
+
   if (loading || !ready) return <Loading />
 
   return (
@@ -133,6 +173,7 @@ export default function CampusMapPage() {
       </p>
 
       <ErrorNote error={error} />
+      {gpsNotice && <div className="alert ok" role="status">{gpsNotice}</div>}
 
       {imageOk === false && (
         <div className="alert warn">
@@ -149,49 +190,89 @@ export default function CampusMapPage() {
         </div>
       )}
 
-      <div className="card" style={{ padding: '0.5rem' }}>
-        <div
-          className={`map-wrap ${placing != null ? 'placing' : ''}`}
-          onClick={placePin}
-        >
-          <img
-            ref={imgRef}
-            src={MAP_IMAGE}
-            alt="Campus map"
-            onLoad={() => setImageOk(true)}
-            onError={() => setImageOk(false)}
-            style={{ display: imageOk === false ? 'none' : 'block' }}
-          />
+      <div className="card map-card">
+        <div className="map-card-heading">
+          <div>
+            <strong>Campus issue map</strong>
+            <span>Displayed near its original size for clearer building labels.</span>
+          </div>
+          <span className="badge">{placed.length} placed</span>
+        </div>
+        <div className="map-tools">
+          <label className="map-search" htmlFor="map-building-search">
+            <span>Find a building</span>
+            <input
+              id="map-building-search"
+              value={mapQuery}
+              onChange={(event) => setMapQuery(event.target.value)}
+              placeholder="Search by building name"
+            />
+          </label>
+          <div className="map-zoom-controls" aria-label="Map zoom controls">
+            <button type="button" className="sm" onClick={() => setMapZoom((zoom) => Math.max(1, Number((zoom - 0.25).toFixed(2))))} disabled={mapZoom <= 1}>−</button>
+            <span aria-live="polite">{Math.round(mapZoom * 100)}%</span>
+            <button type="button" className="sm" onClick={() => setMapZoom((zoom) => Math.min(1.75, Number((zoom + 0.25).toFixed(2))))} disabled={mapZoom >= 1.75}>+</button>
+          </div>
+        </div>
+        {mapQuery.trim() && (
+          <div className="map-search-results" aria-label="Matching buildings">
+            {mapMatches.length ? mapMatches.map((building) => (
+              <button key={building.building_id} type="button" className="sm" onClick={() => setSelected(building.building_id)}>
+                {building.name}
+              </button>
+            )) : <span className="small muted">No placed building matches that search.</span>}
+          </div>
+        )}
+        <p className="map-viewer-tip">Use + / − to inspect a section. When zoomed in, scroll inside the map to move around.</p>
+        <div className="map-viewport">
+          <div
+            className={`map-wrap ${placing != null ? 'placing' : ''}`}
+            style={{ width: `${mapZoom * 100}%` }}
+            onClick={placePin}
+          >
+            <img
+              ref={imgRef}
+              src={MAP_IMAGE}
+              alt="Campus map"
+              decoding="async"
+              onLoad={() => setImageOk(true)}
+              onError={() => setImageOk(false)}
+              style={{ display: imageOk === false ? 'none' : 'block' }}
+            />
 
-          {imageOk !== false &&
-            placed.map((b) => {
-              const tone = b.emergency > 0 ? 'danger' : b.open > 0 ? 'accent' : 'quiet'
-              return (
-                <button
-                  key={b.building_id}
-                  className={`map-pin ${tone} ${selected === b.building_id ? 'active' : ''}`}
-                  style={{ left: `${b.map_x}%`, top: `${b.map_y}%` }}
-                  title={`${b.name} — ${b.open} open of ${b.total}`}
-                  aria-label={`${b.name}: ${b.open} open tickets, ${b.total} total tickets${b.emergency ? `, ${b.emergency} emergency` : ''}`}
-                  onMouseEnter={() => setHovered(b.building_id)}
-                  onMouseLeave={() => setHovered(null)}
-                  onFocus={() => setHovered(b.building_id)}
-                  onBlur={() => setHovered(null)}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setSelected(selected === b.building_id ? null : b.building_id)
-                  }}
-                >
-                  <span className="map-pin-count">{b.open}</span>
-                  <span className="map-pin-label">{b.name}</span>
-                  {(hovered === b.building_id || selected === b.building_id) && (
-                    <span className="map-tooltip" role="status">
-                      <strong>{b.name}</strong>
-                    </span>
-                  )}
-                </button>
-              )
-            })}
+            {imageOk !== false &&
+              placed.map((b) => {
+                const tone = b.emergency > 0 ? 'danger' : b.open > 0 ? 'accent' : 'quiet'
+                const searchMatch = mapQuery.trim() && b.name.toLowerCase().includes(mapQuery.trim().toLowerCase())
+                return (
+                  <button
+                    key={b.building_id}
+                    className={`map-pin ${tone} ${selected === b.building_id ? 'active' : ''} ${searchMatch ? 'search-match' : ''}`}
+                    style={{ left: `${b.map_x}%`, top: `${b.map_y}%` }}
+                    title={`${b.name} — ${b.open} open of ${b.total}`}
+                    aria-label={`${b.name}: ${b.open} open tickets, ${b.total} total tickets${b.emergency ? `, ${b.emergency} emergency` : ''}`}
+                    onMouseEnter={() => setHovered(b.building_id)}
+                    onMouseLeave={() => setHovered(null)}
+                    onFocus={() => setHovered(b.building_id)}
+                    onBlur={() => setHovered(null)}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setSelected(selected === b.building_id ? null : b.building_id)
+                    }}
+                  >
+                    <span className="map-pin-count">{b.open}</span>
+                    <span className="map-pin-label">{b.name}</span>
+                    {(hovered === b.building_id || selected === b.building_id) && (
+                      <span className="map-tooltip" role="status">
+                        <strong>{b.name}</strong>
+                        <small>{b.open} open of {b.total} total ticket{b.total === 1 ? '' : 's'}</small>
+                        {b.emergency > 0 && <small className="map-tooltip-alert">{b.emergency} emergency</small>}
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
+          </div>
         </div>
       </div>
 
@@ -211,14 +292,24 @@ export default function CampusMapPage() {
                 {b.open} open
               </span>
               {isSystemAdmin && (
-                <button
-                  className="sm"
-                  disabled={saving}
-                  onClick={() => setPlacing(b.building_id)}
-                  title="Click, then click the map"
-                >
-                  {b.map_x == null ? 'Place' : 'Move'}
-                </button>
+                <>
+                  <button
+                    className="sm"
+                    disabled={saving}
+                    onClick={() => setPlacing(b.building_id)}
+                    title="Click, then click the map"
+                  >
+                    {b.map_x == null ? 'Place' : 'Move'}
+                  </button>
+                  <button
+                    className="sm"
+                    disabled={gpsSavingId === b.building_id}
+                    onClick={() => calibrateBuildingGps(b)}
+                    title="Stand at the building, then save its current GPS position"
+                  >
+                    {gpsSavingId === b.building_id ? 'Saving GPS…' : b.latitude == null ? 'Set GPS here' : 'Update GPS'}
+                  </button>
+                </>
               )}
             </div>
           ))}

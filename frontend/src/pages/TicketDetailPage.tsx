@@ -411,32 +411,32 @@ export default function TicketDetailPage() {
         ← Back
       </button>
 
-      <h1 style={{ marginTop: '0.75rem' }}>
-        {ticket.is_emergency && <span className="badge danger">Emergency</span>} #
-        {ticket.ticket_id} · {ticket.title}
-      </h1>
-
-      <div className="ticket-meta" style={{ marginBottom: '1rem' }}>
-        <StatusBadge status={statusName} />
-        <PriorityBadge
-          priority={nameById(lookups.priorities, 'priority_id', ticket.priority_id)}
-        />
-        <span className="badge">
-          {nameById(lookups.departments, 'department_id', ticket.department_id) ??
-            'Awaiting routing'}
-        </span>
-        <span className="badge">
-          {nameById(lookups.issueTypes, 'issue_type_id', ticket.issue_type_id) ??
-            'Uncategorised'}
-        </span>
-        <span className="badge">Routing: {humanize(ticket.ai_routing_status)}</span>
-        <span className="small muted">Opened {formatRelative(ticket.created_at)}</span>
-        {isStaff && (
-          <span className="small muted">
-            · {assignee ? `Assigned to ${assignee.first_name} ${assignee.last_name}` : 'Unassigned'}
-          </span>
-        )}
-      </div>
+      <section className="ticket-detail-header">
+        <div>
+          <p className="ticket-number">Ticket #{ticket.ticket_id}</p>
+          <h1>
+            {ticket.is_emergency && <span className="badge danger">Emergency</span>} {ticket.title}
+          </h1>
+          <div className="ticket-meta">
+            <StatusBadge status={statusName} />
+            <PriorityBadge priority={nameById(lookups.priorities, 'priority_id', ticket.priority_id)} />
+            <span className="badge">
+              {nameById(lookups.issueTypes, 'issue_type_id', ticket.issue_type_id) ?? 'Uncategorised'}
+            </span>
+            <span className="badge">Routing: {humanize(ticket.ai_routing_status)}</span>
+            <span className="small muted">Opened {formatRelative(ticket.created_at)}</span>
+          </div>
+        </div>
+        <aside className="ticket-routing" aria-label="Routing and assignment">
+          <span>Routed to</span>
+          <strong>
+            {nameById(lookups.departments, 'department_id', ticket.department_id) ?? 'Awaiting routing'}
+          </strong>
+          {isStaff && (
+            <small>{assignee ? `Assigned to ${assignee.first_name} ${assignee.last_name}` : 'Not assigned to a staff member yet'}</small>
+          )}
+        </aside>
+      </section>
 
       <ErrorNote error={error} />
 

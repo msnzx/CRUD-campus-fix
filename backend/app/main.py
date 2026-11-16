@@ -91,6 +91,71 @@ class DispatchResult(BaseModel):
     skipped: int
 
 
+class InviteUserRequest(BaseModel):
+    firstName: str
+    lastName: str
+    email: str
+
+
+class PasswordResetRequest(BaseModel):
+    email: str
+
+
+class AdminActionResult(BaseModel):
+    message: str
+
+
+def require_system_admin(caller: Caller) -> None:
+    if not caller.is_system_admin:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "System admins only")
+
+
+@app.post("/api/admin/users/invite", response_model=AdminActionResult)
+def invite_user(
+    payload: InviteUserRequest,
+    caller: Caller = Depends(current_caller),
+    admin: Client = Depends(admin_client),
+    cfg: Settings = Depends(get_settings),
+) -> AdminActionResult:
+    """Invite a new account without ever giving an administrator its password."""
+    require_system_admin(caller)
+    email = payload.email.strip().lower()
+    if not email or "@" not in email or not payload.firstName.strip() or not payload.lastName.strip():
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Enter a first name, last name, and valid email.")
+    try:
+        admin.auth.admin.invite_user_by_email(
+            email,
+            {
+                "data": {"first_name": payload.firstName.strip(), "last_name": payload.lastName.strip()},
+                "redirect_to": f"{cfg.app_url.rstrip('/')}/reset-password",
+            },
+        )
+    except Exception:
+        log.exception("System admin invitation failed")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "The invitation could not be sent. Check that this email is not already registered.")
+    return AdminActionResult(message=f"An account invitation was sent to {email}.")
+
+
+@app.post("/api/admin/users/password-reset", response_model=AdminActionResult)
+def admin_password_reset(
+    payload: PasswordResetRequest,
+    caller: Caller = Depends(current_caller),
+    admin: Client = Depends(admin_client),
+    cfg: Settings = Depends(get_settings),
+) -> AdminActionResult:
+    """Send a reset link; no admin can view or choose the recipient's password."""
+    require_system_admin(caller)
+    email = payload.email.strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Enter a valid email.")
+    try:
+        admin.auth.reset_password_for_email(email, {"redirect_to": f"{cfg.app_url.rstrip('/')}/reset-password"})
+    except Exception:
+        log.exception("System admin password reset failed")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "The reset link could not be sent.")
+    return AdminActionResult(message=f"A password reset link was sent to {email}.")
+
+
 @app.post("/api/notifications/dispatch", response_model=DispatchResult)
 def dispatch_notifications(
     caller: Caller = Depends(current_caller),

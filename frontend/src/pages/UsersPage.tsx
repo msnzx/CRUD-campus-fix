@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { FormEvent } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
 import { activeDepartments, useLookups } from '../lib/useLookups'
-import { Empty, ErrorNote, Loading } from '../components/ui'
+import { Empty, ErrorNote, Loading, Modal } from '../components/ui'
 import { humanize } from '../lib/format'
 import { ROLE } from '../lib/domain'
 import type { RoleName } from '../lib/domain'
+import { inviteUser, sendPasswordReset } from '../lib/adminApi'
 
 interface UserRow {
   user_id: string
@@ -34,6 +36,10 @@ export default function UsersPage() {
   const [error, setError] = useState<unknown>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  const [inviteOpen, setInviteOpen] = useState(false)
+  const [inviteBusy, setInviteBusy] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [invite, setInvite] = useState({ firstName: '', lastName: '', email: '' })
 
   const load = useCallback(async () => {
     const { data, error } = await supabase
@@ -65,6 +71,37 @@ export default function UsersPage() {
     setBusyId(null)
   }
 
+  async function createInvitation(event: FormEvent) {
+    event.preventDefault()
+    setInviteBusy(true)
+    setError(null)
+    setNotice(null)
+    try {
+      const message = await inviteUser(invite)
+      setNotice(message)
+      setInviteOpen(false)
+      setInvite({ firstName: '', lastName: '', email: '' })
+      await load()
+    } catch (err) {
+      setError(err)
+    } finally {
+      setInviteBusy(false)
+    }
+  }
+
+  async function resetPassword(userId: string, email: string) {
+    setBusyId(userId)
+    setError(null)
+    setNotice(null)
+    try {
+      setNotice(await sendPasswordReset(email))
+    } catch (err) {
+      setError(err)
+    } finally {
+      setBusyId(null)
+    }
+  }
+
   if (!users || !ready) return error ? <div className="content"><ErrorNote error={error} /></div> : <Loading />
 
   const q = query.trim().toLowerCase()
@@ -76,17 +113,25 @@ export default function UsersPage() {
   })
 
   return (
-    <div className="content">
-      <h1>{isSystemAdmin ? 'Users' : 'Department staff'}</h1>
-      <p className="muted small">
+    <div className="content admin-page">
+      <section className="operations-hero admin-hero">
+        <div><p className="eyebrow">Administration</p><h1>{isSystemAdmin ? 'People & access' : 'Department staff'}</h1>
+          <p>
         {isSystemAdmin
           ? 'Change roles, deactivate accounts that have left, and set department membership. New sign-ups always start as students.'
           : 'Add or remove staff in your departments. Ask a system admin to change someone’s role.'}
-      </p>
+          </p></div>
+        <div className="actions">
+          {isSystemAdmin && <button className="primary" onClick={() => setInviteOpen(true)}>+ Add user</button>}
+          <div className="queue-count"><strong>{visible.length}</strong><span>people shown</span></div>
+        </div>
+      </section>
 
       <ErrorNote error={error} />
+      {notice && <div className="alert ok" role="status">{notice}</div>}
 
-      <div className="card card-tight">
+      <div className="card card-tight queue-controls">
+        <div className="section-label"><strong>Directory</strong><span>Search people and manage their access</span></div>
         <label htmlFor="u-search">Search</label>
         <input
           id="u-search"
@@ -135,17 +180,23 @@ export default function UsersPage() {
                     ))}
                   </select>
                   {!isSelf && (
-                    <button
-                      className={`sm ${u.active ? 'danger' : ''}`}
-                      disabled={busy}
-                      onClick={() =>
-                        void call(u.user_id, () =>
-                          supabase.rpc('admin_set_user_active', { p_user_id: u.user_id, p_active: !u.active }),
-                        )
-                      }
-                    >
-                      {u.active ? 'Deactivate' : 'Reactivate'}
-                    </button>
+                    <>
+                      <button className="sm" disabled={busy || !u.active} onClick={() => void resetPassword(u.user_id, u.email)}>
+                        Reset password
+                      </button>
+                      <button
+                        className={`sm ${u.active ? 'danger' : ''}`}
+                        disabled={busy}
+                        onClick={() => {
+                          if (u.active && !window.confirm(`Remove ${u.first_name} ${u.last_name}'s access? Their tickets will be kept.`)) return
+                          void call(u.user_id, () =>
+                            supabase.rpc('admin_set_user_active', { p_user_id: u.user_id, p_active: !u.active }),
+                          )
+                        }}
+                      >
+                        {u.active ? 'Remove access' : 'Reactivate'}
+                      </button>
+                    </>
                   )}
                 </div>
               ) : (
@@ -215,6 +266,23 @@ export default function UsersPage() {
           </div>
         )
       })}
+
+      {inviteOpen && (
+        <Modal title="Add a CaldwellFix user" onClose={() => !inviteBusy && setInviteOpen(false)}>
+          <form onSubmit={(event) => void createInvitation(event)}>
+            <p className="muted">They will receive an email invitation to set a password. New accounts begin as students; you can then change their role above.</p>
+            <div className="form-grid">
+              <label>First name<input required value={invite.firstName} onChange={(e) => setInvite({ ...invite, firstName: e.target.value })} /></label>
+              <label>Last name<input required value={invite.lastName} onChange={(e) => setInvite({ ...invite, lastName: e.target.value })} /></label>
+            </div>
+            <label>Email<input required type="email" value={invite.email} onChange={(e) => setInvite({ ...invite, email: e.target.value })} placeholder="name@caldwell.edu" /></label>
+            <div className="actions" style={{ marginTop: '1rem', justifyContent: 'flex-end' }}>
+              <button type="button" className="secondary" disabled={inviteBusy} onClick={() => setInviteOpen(false)}>Cancel</button>
+              <button className="primary" disabled={inviteBusy}>{inviteBusy ? 'Sending…' : 'Send invitation'}</button>
+            </div>
+          </form>
+        </Modal>
+      )}
     </div>
   )
 }

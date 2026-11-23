@@ -700,3 +700,8 @@ button.link:hover:not(:disabled) { background: none; text-decoration: underline;
   border-radius: 4px 4px 0 0;
 }
 .cols-axis { display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-dim); margin-top: 0.3rem; }
+
+/* Voice input under the ticket description (VoiceInputButton). */
+.voice-input { margin-top: 0.5rem; }
+.voice-button.listening { color: var(--danger); border-color: var(--danger); background: var(--danger-bg); }
+.voice-error { color: var(--danger); }

@@ -356,6 +356,8 @@ function StudentMapPicker({
     </section>
   )
 }
+import { appendTranscript } from '../lib/voice'
+import VoiceInputButton from '../components/VoiceInputButton'
 
 export default function SubmitTicketPage() {
   const nav = useNavigate()
@@ -654,6 +656,10 @@ export default function SubmitTicketPage() {
           <div className="hint">
             Include what you see, when it started, and anything you already tried.
           </div>
+          <VoiceInputButton
+            disabled={busy}
+            onTranscript={(spoken) => setDescription((current) => appendTranscript(current, spoken))}
+          />
         </div>
 
         <div className="field">

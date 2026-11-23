@@ -1029,3 +1029,7 @@ button:active:not(:disabled), .primary:active, .secondary:active { transform: tr
   .public-footer { max-width: calc(100% - 2rem); padding: .35rem .55rem; font-size: .62rem; }
   .public-footer-slogan { display: none; }
 }
+/* Voice input under the ticket description (VoiceInputButton). */
+.voice-input { margin-top: 0.5rem; }
+.voice-button.listening { color: var(--danger); border-color: var(--danger); background: var(--danger-bg); }
+.voice-error { color: var(--danger); }

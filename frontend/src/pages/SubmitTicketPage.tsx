@@ -19,6 +19,8 @@ import {
 } from '../lib/domain'
 import { classifyTicket } from '../lib/classify'
 import { formatBytes } from '../lib/format'
+import { appendTranscript } from '../lib/voice'
+import VoiceInputButton from '../components/VoiceInputButton'
 
 export default function SubmitTicketPage() {
   const nav = useNavigate()
@@ -227,6 +229,10 @@ export default function SubmitTicketPage() {
               ? `A bit more detail, please — at least ${MIN_DESCRIPTION_LENGTH} characters so we can route this correctly.`
               : 'Include what you see, when it started, and anything you already tried.'}
           </div>
+          <VoiceInputButton
+            disabled={busy}
+            onTranscript={(spoken) => setDescription((current) => appendTranscript(current, spoken))}
+          />
         </div>
 
         <div className="field">
